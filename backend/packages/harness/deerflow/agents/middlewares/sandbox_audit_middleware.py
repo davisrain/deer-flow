@@ -313,6 +313,7 @@ class SandboxAuditMiddleware(AgentMiddleware[ThreadState]):
         verdict = _classify_command(command)
 
         # ③ audit log
+        # 记录审计日志
         self._write_audit(thread_id, command, verdict)
 
         if verdict == "block":
@@ -332,14 +333,18 @@ class SandboxAuditMiddleware(AgentMiddleware[ThreadState]):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], ToolMessage | Command],
     ) -> ToolMessage | Command:
+        # 只拦截bash工具
         if request.tool_call.get("name") != "bash":
             return handler(request)
 
         command, _, verdict, reject_reason = self._pre_process(request)
+        # block类型直接拦截
         if verdict == "block":
             reason = reject_reason or "security violation detected"
             return self._build_block_message(request, reason)
+        # 调用实际的工具
         result = handler(request)
+        # 如果warn等级，在message中添加warn信息
         if verdict == "warn":
             result = self._append_warn_to_result(result, command)
         return result

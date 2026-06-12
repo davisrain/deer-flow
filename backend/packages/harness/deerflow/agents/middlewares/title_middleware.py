@@ -95,13 +95,15 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
         """
         config = self._get_title_config()
         messages = state.get("messages", [])
-
+        # 获取到human和ai消息中的content
         user_msg_content = next((m.content for m in messages if self._is_user_message_for_title(m)), "")
         assistant_msg_content = next((m.content for m in messages if m.type == "ai"), "")
 
         user_msg = self._normalize_content(user_msg_content)
+        # 将ai消息中的<think>标签去除
         assistant_msg = self._strip_think_tags(self._normalize_content(assistant_msg_content))
 
+        # 使用配置的模版生成title
         prompt = config.prompt_template.format(
             max_words=config.max_words,
             user_msg=user_msg[:500],
@@ -123,6 +125,7 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
 
     def _fallback_title(self, user_msg: str) -> str:
         config = self._get_title_config()
+        # 根据titleConfig配置的最大字符数进行截断
         fallback_chars = min(config.max_chars, 50)
         if len(user_msg) > fallback_chars:
             return user_msg[:fallback_chars].rstrip() + "..."
@@ -145,9 +148,11 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
 
     def _generate_title_result(self, state: TitleMiddlewareState) -> dict | None:
         """Generate a local fallback title without blocking on an LLM call."""
+        # 判断是否需要生成title
+        # 要求titleConfig是enable的，title没有生成过，并且存在两个消息，一个human一个ai
         if not self._should_generate_title(state):
             return None
-
+        
         _, user_msg = self._build_title_prompt(state)
         return {"title": self._fallback_title(user_msg)}
 

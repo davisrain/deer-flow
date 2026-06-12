@@ -69,8 +69,10 @@ class SandboxMiddleware(AgentMiddleware[SandboxMiddlewareState]):
             thread_id = (runtime.context or {}).get("thread_id")
             if thread_id is None:
                 return super().before_agent(state, runtime)
+            # 根据thread_id获取sandbox_id
             sandbox_id = self._acquire_sandbox(thread_id)
             logger.info(f"Assigned sandbox {sandbox_id} to thread {thread_id}")
+            # 向state中写入sandbox属性
             return {"sandbox": {"sandbox_id": sandbox_id}}
         return super().before_agent(state, runtime)
 

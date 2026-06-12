@@ -282,17 +282,29 @@ class TokenUsageMiddleware(AgentMiddleware):
         if len(messages) >= 2:
             from deerflow.tools.builtins.task_tool import pop_cached_subagent_usage
 
+            # 为什么从倒数第二条开始往前扫？
+            #
+            # 消息结构通常是：
+            #
+            # ...
+            # AIMessage(tool_calls=[task(A), task(B)])  ← dispatch_idx
+            # ToolMessage(task A result)                ← idx
+            # ToolMessage(task B result)                ← idx-1（连续 ToolMessage）
+            # AIMessage(当前这轮的新回复)               ← 最后一条，[-1]
+            # 从 [-2] 开始，连续向前扫 ToolMessage，直到遇到非 ToolMessage 为止。这样能把同一轮所有 task 结果都处理到，最后找到它们共同的派发 AIMessage 累加进去。
             idx = len(messages) - 2
             while idx >= 0:
                 tool_msg = messages[idx]
                 if not isinstance(tool_msg, ToolMessage) or not tool_msg.tool_call_id:
                     break
 
+                # subagent的token用量都是通过tool_call_id缓存起来的
                 subagent_usage = pop_cached_subagent_usage(tool_msg.tool_call_id)
                 if subagent_usage:
                     # Search backward from the ToolMessage to find the AIMessage
                     # that dispatched it.  A single model response can dispatch
                     # multiple task tool calls, so we can't assume a fixed offset.
+                    # 从当前的ToolMessage开始往回找派发tool_call的AIMessage
                     dispatch_idx = idx - 1
                     while dispatch_idx >= 0:
                         candidate = messages[dispatch_idx]
@@ -301,6 +313,7 @@ class TokenUsageMiddleware(AgentMiddleware):
                             # AIMessage (multiple task calls in one response),
                             # or merge fresh from the original message.
                             existing_update = state_updates.get(dispatch_idx)
+                            # 拿到AIMessage的usage_metadata，将subagent的usage累加进去
                             prev = existing_update.usage_metadata if existing_update else (getattr(candidate, "usage_metadata", None) or {})
                             merged = {
                                 **prev,
@@ -311,14 +324,19 @@ class TokenUsageMiddleware(AgentMiddleware):
                             state_updates[dispatch_idx] = candidate.model_copy(update={"usage_metadata": merged})
                             break
                         dispatch_idx -= 1
+                # 继续往回找调用task工具的ToolMessage
                 idx -= 1
 
+        # 拿到最后一个消息
         last = messages[-1]
+        # 如何不是AIMessage的话，判断下有没有subagent的usage的设置，如果有，返回更新后的AIMessage。
+        # 否则直接返回None
         if not isinstance(last, AIMessage):
             if state_updates:
                 return {"messages": [state_updates[idx] for idx in sorted(state_updates)]}
             return None
 
+        # 如果最后一个是AIMessage的话，打印它的token usage
         usage = getattr(last, "usage_metadata", None)
         if usage:
             input_token_details = usage.get("input_token_details") or {}
@@ -329,6 +347,7 @@ class TokenUsageMiddleware(AgentMiddleware):
             if output_token_details:
                 detail_parts.append(f"output_token_details={output_token_details}")
             detail_suffix = f" {' '.join(detail_parts)}" if detail_parts else ""
+            # 将该AIMessage的input ouput total都打印一下
             logger.info(
                 "LLM token usage: input=%s output=%s total=%s%s",
                 usage.get("input_tokens", "?"),
@@ -338,14 +357,19 @@ class TokenUsageMiddleware(AgentMiddleware):
             )
 
         todos = state.get("todos") or []
+        # 根据最后一个AIMessage和todos来构建该消息的归属类型，用于前端展示
+        # ！！这个方法是重点
         attribution = _build_attribution(last, todos if isinstance(todos, list) else [])
         additional_kwargs = dict(getattr(last, "additional_kwargs", {}) or {})
 
+        # 如果已经AIMessage的additional_kwargs已经存在归属类型了，直接返回前面的结果
         if additional_kwargs.get(TOKEN_USAGE_ATTRIBUTION_KEY) == attribution:
             return {"messages": [state_updates[idx] for idx in sorted(state_updates)]} if state_updates else None
 
+        # 如果还没有设置归属类型，设置进去
         additional_kwargs[TOKEN_USAGE_ATTRIBUTION_KEY] = attribution
         updated_msg = last.model_copy(update={"additional_kwargs": additional_kwargs})
+        # 并且将最后一个消息也放入状态更新列表，用于返回
         state_updates[len(messages) - 1] = updated_msg
         return {"messages": [state_updates[idx] for idx in sorted(state_updates)]}
 

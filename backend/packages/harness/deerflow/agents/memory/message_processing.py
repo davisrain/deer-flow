@@ -64,9 +64,11 @@ def filter_messages_for_memory(messages: list[Any]) -> list[Any]:
             content_str = extract_message_text(msg)
             if "<uploaded_files>" in content_str:
                 stripped = _UPLOAD_BLOCK_RE.sub("", content_str).strip()
+                # 如果是纯文件上传，丢掉下一个ai消息，因为没有价值
                 if not stripped:
                     skip_next_ai = True
                     continue
+                # 如果不是纯文件上传，将文件上传的内容剔除之后设置到新的msg中，用于保存memory
                 clean_msg = copy(msg)
                 clean_msg.content = stripped
                 filtered.append(clean_msg)

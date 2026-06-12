@@ -131,11 +131,13 @@ class DanglingToolCallMiddleware(AgentMiddleware[AgentState]):
         This normalizes model-bound causal order before provider serialization while
         preserving already-valid transcripts unchanged.
         """
+        # 获取messages中的每个tool_call_id对应的ToolMessage
         tool_messages_by_id: dict[str, deque[ToolMessage]] = defaultdict(deque)
         for msg in messages:
             if isinstance(msg, ToolMessage):
                 tool_messages_by_id[msg.tool_call_id].append(msg)
 
+        # 获取到ai_message中的tool_calls信息
         tool_call_ids: set[str] = set()
         for msg in messages:
             if getattr(msg, "type", None) != "ai":
@@ -148,22 +150,28 @@ class DanglingToolCallMiddleware(AgentMiddleware[AgentState]):
         patched: list = []
         patch_count = 0
         for msg in messages:
+            # 如果是ToolMessage，继续循环
             if isinstance(msg, ToolMessage) and msg.tool_call_id in tool_call_ids:
                 continue
 
+            # 将消息添加进修复列表
             patched.append(msg)
+            # 如果不是ai消息，继续循环
             if getattr(msg, "type", None) != "ai":
                 continue
-
+            # 遍历ai消息中的tool_calls
             for tc in self._message_tool_calls(msg):
                 tc_id = tc.get("id")
                 if not tc_id:
                     continue
 
+                # 从之前维护的tool_calls字典中获取toolMsg
                 tool_msg_queue = tool_messages_by_id.get(tc_id)
                 existing_tool_msg = tool_msg_queue.popleft() if tool_msg_queue else None
+                # 如果存在工具消息，添加进修复列表
                 if existing_tool_msg is not None:
                     patched.append(existing_tool_msg)
+                # 如果不存在，构建一个对应的工具消息出来
                 else:
                     patched.append(
                         ToolMessage(

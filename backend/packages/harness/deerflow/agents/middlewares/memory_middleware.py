@@ -80,6 +80,7 @@ class MemoryMiddleware(AgentMiddleware[MemoryMiddlewareState]):
             return None
 
         # Filter to only keep user inputs and final assistant responses
+        # 只保留HumanMessage和没有tool_calls的AIMessage
         filtered_messages = filter_messages_for_memory(messages)
 
         # Only queue if there's meaningful conversation
@@ -91,11 +92,13 @@ class MemoryMiddleware(AgentMiddleware[MemoryMiddlewareState]):
             return None
 
         # Queue the filtered conversation for memory update
+        # 判断最近的HumanMessage里面用户是在纠正ai还是同意ai
         correction_detected = detect_correction(filtered_messages)
         reinforcement_detected = not correction_detected and detect_reinforcement(filtered_messages)
         # Capture user_id at enqueue time while the request context is still alive.
         # threading.Timer fires on a different thread where ContextVar values are not
         # propagated, so we must store user_id explicitly in ConversationContext.
+        # 这里必须要拿到user_id，因为实际写入memory的线程中没有这个user_id
         user_id = get_effective_user_id()
         queue = get_memory_queue()
         queue.add(

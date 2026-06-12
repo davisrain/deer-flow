@@ -188,11 +188,13 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
         error_code = _extract_error_code(exc)
         status_code = _extract_status_code(exc)
 
+        # 如果是额度 或者 认证等异常，不重试
         if _matches_any(lowered, _QUOTA_PATTERNS) or _matches_any(str(error_code).lower(), _QUOTA_PATTERNS):
             return False, "quota"
         if _matches_any(lowered, _AUTH_PATTERNS):
             return False, "auth"
 
+        # 如果是超时或者服务端繁忙等异常，重试
         exc_name = exc.__class__.__name__
         if exc_name in {
             "APITimeoutError",
@@ -208,6 +210,7 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
         if _matches_any(lowered, _BUSY_PATTERNS):
             return True, "busy"
 
+        # 其他未归类的异常 不重试
         return False, "generic"
 
     def _build_retry_delay_ms(self, attempt: int, exc: BaseException) -> int:
@@ -299,6 +302,7 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
         request: ModelRequest,
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelCallResult:
+        # 判断熔断器状态，如果是打开的，直接返回一个错误的AIMessages
         if self._check_circuit():
             return self._build_error_fallback_message(
                 self._build_circuit_breaker_message(),
@@ -310,19 +314,25 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
         attempt = 1
         while True:
             try:
+                # 尝试调用llm
                 response = handler(request)
+                # 成功之后更新熔断器状态
                 self._record_success()
                 return response
             except GraphBubbleUp:
                 # Preserve LangGraph control-flow signals (interrupt/pause/resume).
+                # 如果是langgraph的控制信号，直接向上抛，并且不更新熔断器状态
                 with self._circuit_lock:
                     if self._circuit_state == "half_open":
                         self._circuit_probe_in_flight = False
                 raise
             except Exception as exc:
+                # 先对异常进行分类，判断这个异常是可重试还是不可重试的
                 retriable, reason = self._classify_error(exc)
+                # 确认最大重试次数
                 max_attempts = self._max_attempts_for(exc)
                 if retriable and attempt < max_attempts:
+                    # 构建重试的延时时间
                     wait_ms = self._build_retry_delay_ms(attempt, exc)
                     logger.warning(
                         "Transient LLM error on attempt %d/%d; retrying in %dms: %s",
@@ -331,6 +341,7 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
                         wait_ms,
                         _extract_error_detail(exc),
                     )
+                    # 向stream_writer发送一个事件，让前端感知到重试
                     self._emit_retry_event(attempt, wait_ms, reason)
                     time.sleep(wait_ms / 1000)
                     attempt += 1
@@ -341,8 +352,10 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
                     _extract_error_detail(exc),
                     exc_info=exc,
                 )
+                # 可重试的情况，需要在熔断器中记录失败次数
                 if retriable:
                     self._record_failure()
+                # 重试次数耗尽之后仍然失败的，构建一个降级的AIMessage返回
                 return self._build_user_fallback_message(exc, reason)
 
     @override

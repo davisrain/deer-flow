@@ -124,15 +124,18 @@ class TodoMiddleware(TodoListMiddleware):
         runtime: Runtime,
     ) -> dict[str, Any] | None:
         """Inject a todo-list reminder when write_todos has left the context window."""
+        # 从状态中获取todos，如果没有todos，不做任何操作
         todos: list[Todo] = state.get("todos") or []  # type: ignore[assignment]
         if not todos:
             return None
 
         messages = state.get("messages") or []
+        # 判断历史消息中是否调用了write_todos工具，如果该消息存在，说明没有被summarize掉，不做操作
         if _todos_in_messages(messages):
             # write_todos is still visible in context — nothing to do.
             return None
 
+        # 判断历史消息中是否已经存在name为todo_reminder的HumanMessage，存在说明已经处理过了，不用再次处理
         if _reminder_in_messages(messages):
             # A reminder was already injected and hasn't been truncated yet.
             return None
@@ -142,6 +145,7 @@ class TodoMiddleware(TodoListMiddleware):
         formatted = _format_todos(todos)
         reminder = HumanMessage(
             name="todo_reminder",
+            # 该消息不在前端展示，所以需要hide_from_ui
             additional_kwargs={"hide_from_ui": True},
             content=(
                 "<system_reminder>\n"
@@ -209,22 +213,31 @@ class TodoMiddleware(TodoListMiddleware):
         self._completion_reminder_touch_order.pop(key, None)
 
     def _prune_completion_reminder_state_locked(self, protected_key: tuple[str, str]) -> None:
+        # 取三个dict的key并集
         keys = self._completion_reminder_keys_locked()
+        # 判断是否超出容量阈值
         overflow = len(keys) - self._MAX_COMPLETION_REMINDER_KEYS
         if overflow <= 0:
             return
 
         candidates = [key for key in keys if key != protected_key]
+        # 根据order排序，order越小越在前面，表示最远使用
         candidates.sort(key=lambda key: self._completion_reminder_touch_order.get(key, 0))
+        # 将这些超出的reminder从lru中删除
         for key in candidates[:overflow]:
             self._drop_completion_reminder_key_locked(key)
 
     def _queue_completion_reminder(self, runtime: Runtime, reminder: str) -> None:
+        # thread_id和run_id构建key
         key = self._pending_key(runtime)
         with self._lock:
+            # 将reminder添加进对应的key
             self._pending_completion_reminders.setdefault(key, []).append(reminder)
+            # 添加次数
             self._completion_reminder_counts[key] = self._completion_reminder_counts.get(key, 0) + 1
+            # 记录该key的访问次序，用于lru排序
             self._touch_completion_reminder_key_locked(key)
+            # 检查lru是否超出限制，将最长时间未使用的key删掉
             self._prune_completion_reminder_state_locked(protected_key=key)
 
     def _completion_reminder_count_for_runtime(self, runtime: Runtime) -> int:
@@ -254,6 +267,7 @@ class TodoMiddleware(TodoListMiddleware):
 
     @override
     def before_agent(self, state: ThreadState, runtime: Runtime) -> dict[str, Any] | None:
+        # 把当前thread_id中的其他run_id在lru的reminder删除掉
         self._clear_other_run_completion_reminders(runtime)
         return None
 
@@ -281,6 +295,7 @@ class TodoMiddleware(TodoListMiddleware):
         infinite loops when the agent cannot make further progress.
         """
         # 1. Preserve base class logic (parallel write_todos detection).
+        # 这里是在检查AIMessage中是否出现了多个write_todos的tool_call，如果出现了，会添加一条错误信息的ToolMessage进去
         base_result = super().after_model(state, runtime)
         if base_result is not None:
             return base_result
@@ -299,13 +314,16 @@ class TodoMiddleware(TodoListMiddleware):
             return None
 
         # 4. Enforce a reminder cap to prevent infinite re-engagement loops.
+        # 检查thread_id和run_id对应已重试次数，如果大于两次，就不要循环了，防止无限循环的出现
         if self._completion_reminder_count_for_runtime(runtime) >= self._MAX_COMPLETION_REMINDERS:
             return None
 
         # 5. Queue a reminder for the next model request and jump back. We must
         # not persist this control prompt as a normal HumanMessage, otherwise it
         # can leak into user-visible message streams and saved transcripts.
+        # 添加一个reminder进队列中，这里不用HumanMessage，是为了不给用户展示
         self._queue_completion_reminder(runtime, _format_completion_reminder(todos))
+        # 返回jump_to的值，langgraph会直接跳转到model节点
         return {"jump_to": "model"}
 
     @override
@@ -323,9 +341,12 @@ class TodoMiddleware(TodoListMiddleware):
         return "\n\n".join(dict.fromkeys(reminders))
 
     def _augment_request(self, request: ModelRequest) -> ModelRequest:
+        # 从lru中拿出key对应的reminders
         reminders = self._drain_completion_reminders(request.runtime)
+        # 如果不存在，不处理
         if not reminders:
             return request
+        # 如果存在，构建一个临时的HumanMessage，告诉模型todo还没有完成
         new_messages = [
             *request.messages,
             HumanMessage(
@@ -354,6 +375,7 @@ class TodoMiddleware(TodoListMiddleware):
 
     @override
     def after_agent(self, state: ThreadState, runtime: Runtime) -> dict[str, Any] | None:
+        # 清理自己run_id对应的reminders
         self._clear_current_run_completion_reminders(runtime)
         return None
 

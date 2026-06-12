@@ -62,10 +62,13 @@ class DeferredToolFilterMiddleware(AgentMiddleware[AgentState]):
     def _blocked_tool_message(self, request: ToolCallRequest) -> ToolMessage | None:
         if not self._deferred:
             return None
+        # 获取要调用的工具名称
         name = str(request.tool_call.get("name") or "")
+        # 如果name不存在 或者 name不在要隐藏的toolname集合内，返回None
         if not name or name not in self._hidden(request.state):
             return None
         tool_call_id = str(request.tool_call.get("id") or "missing_tool_call_id")
+        # 走到这步说明llm调用了一个没有promote的deferred的工具，返回一个错误的ToolMessage
         return ToolMessage(
             content=(f"Error: Tool '{name}' is deferred and has not been promoted yet. Call tool_search first to expose and promote this tool's schema, then retry."),
             tool_call_id=tool_call_id,
@@ -79,6 +82,8 @@ class DeferredToolFilterMiddleware(AgentMiddleware[AgentState]):
         request: ModelRequest,
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelCallResult:
+        # 将mcp的tools从tools集合中过滤掉，不让llm看见
+        # 要过滤的tool是deferred - promoted的tool
         return handler(self._filter_tools(request))
 
     @override
@@ -87,6 +92,7 @@ class DeferredToolFilterMiddleware(AgentMiddleware[AgentState]):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], ToolMessage | Command],
     ) -> ToolMessage | Command:
+        # 拦截llm对没有promote的deferred的工具的调用
         blocked = self._blocked_tool_message(request)
         if blocked is not None:
             return blocked

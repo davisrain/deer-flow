@@ -223,18 +223,22 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
                 thread_id = get_config().get("configurable", {}).get("thread_id")
             except RuntimeError:
                 pass  # get_config() raises outside a runnable context (e.g. unit tests)
+        # 拿到thread_id和user_id对应的上传文件的目录
         uploads_dir = self._paths.sandbox_uploads_dir(thread_id, user_id=get_effective_user_id()) if thread_id else None
 
         # Get newly uploaded files from the current message's additional_kwargs.files
+        # 从最新的HumanMessage中拿到上传的文件名称，拿到根据文件名去上传目录中找到对应的文件，解析文件数据构建list
         new_files = self._files_from_kwargs(last_message, uploads_dir) or []
 
         # Collect historical files from the uploads directory (all except the new ones)
         new_filenames = {f["filename"] for f in new_files}
+        # 找到历史已经上传过的文件
         historical_files: list[dict] = []
         if uploads_dir and uploads_dir.exists():
             for file_path in sorted(uploads_dir.iterdir()):
                 if file_path.is_file() and file_path.name not in new_filenames:
                     stat = file_path.stat()
+                    # 提取文件的大纲
                     outline, preview = _extract_outline_for_file(file_path)
                     historical_files.append(
                         {
@@ -248,6 +252,7 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
                     )
 
         # Attach outlines to new files as well
+        # 新上传的文件也提取大纲
         if uploads_dir:
             for file in new_files:
                 phys_path = uploads_dir / file["filename"]
@@ -261,10 +266,12 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
         logger.debug(f"New files: {[f['filename'] for f in new_files]}, historical: {[f['filename'] for f in historical_files]}")
 
         # Create files message and prepend to the last human message content
+        # 构建上传文件相关的提示词
         files_message = self._create_files_message(new_files, historical_files)
 
         # Extract original content - handle both string and list formats
         original_content = last_message.content
+        # 更新进HumanMessage的content中
         if isinstance(original_content, str):
             # Simple case: string content, just prepend files message
             updated_content = f"{files_message}\n\n{original_content}"

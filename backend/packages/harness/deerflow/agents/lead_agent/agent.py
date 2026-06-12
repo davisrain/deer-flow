@@ -83,6 +83,8 @@ def _create_summarization_middleware(*, app_config: AppConfig | None = None) -> 
         return None
 
     # Prepare trigger parameter
+    # 从配置文件中获取触发summary的条件
+    # 支持三种类型：tokens、messages、fraction
     trigger = None
     if config.trigger is not None:
         if isinstance(config.trigger, list):
@@ -91,6 +93,7 @@ def _create_summarization_middleware(*, app_config: AppConfig | None = None) -> 
             trigger = config.trigger.to_tuple()
 
     # Prepare keep parameter
+    # 从配置文件中获取最终保留的数据
     keep = config.keep.to_tuple()
 
     # Prepare model parameter.
@@ -101,8 +104,10 @@ def _create_summarization_middleware(*, app_config: AppConfig | None = None) -> 
     # ``_make_lead_agent``) already carries tracing callbacks; binding them
     # again at the model level would emit duplicate spans and break
     # ``session_id`` / ``user_id`` propagation.
+    # 可以专门配置用于摘要的轻量模型
     if config.model_name:
         model = create_chat_model(name=config.model_name, thinking_enabled=False, app_config=resolved_app_config, attach_tracing=False)
+    # 如果没有配置，使用默认模型
     else:
         model = create_chat_model(thinking_enabled=False, app_config=resolved_app_config, attach_tracing=False)
     model = model.with_config(tags=["middleware:summarize"])
@@ -294,40 +299,109 @@ def build_middlewares(
         List of middleware instances.
     """
     resolved_app_config = app_config or get_app_config()
+    # 构建一些主要的middleware
+    # ThreadDataMiddleware 创建thread_id维度的数据目录
+    # SandboxMiddleware 创建sandbox
+    # DanglingToolCallMiddleware 修复缺失和ToolMessage
+    # LLMErrorHandlingMiddleware 处理llm返回异常：重试、熔断、降级
+    # SandboxAuditMiddleware 对bash命令做审计
+    # ToolErrorHandlingMiddleware 处理tool调用异常，降级为ToolMessage，并且给task工具调用添加subagent的执行状态
     middlewares = build_lead_runtime_middlewares(app_config=resolved_app_config, lazy_init=True)
 
     # Always inject current date (and optionally memory) as <system-reminder> into the
     # first HumanMessage to keep the system prompt fully static for prefix-cache reuse.
     from deerflow.agents.middlewares.dynamic_context_middleware import DynamicContextMiddleware
 
+    # 将时间和memory等动态信息拆分到一个特殊的HumanMessage中，作为一个<system-reminder>，以达到将system prompt静态化的效果，以命中prefix cache，节省token。
+    # 以前的版本currentdate和memory是在SystemPrompt中的
     middlewares.append(DynamicContextMiddleware(agent_name=agent_name, app_config=resolved_app_config))
 
     # Add summarization middleware if enabled
+    # 在每次调用 LLM 前检测对话历史是否过长，过长则用 LLM 把旧消息压缩成摘要，同时确保 skill 内容、日期记忆 reminder 不被误删，并在压缩前把历史刷入记忆系统。
     summarization_middleware = _create_summarization_middleware(app_config=resolved_app_config)
     if summarization_middleware is not None:
         middlewares.append(summarization_middleware)
 
     # Add TodoList middleware if plan mode is enabled
+    # 根据是否plan mode决定是否要添加TodoListMiddleware
     cfg = _get_runtime_config(config)
     is_plan_mode = cfg.get("is_plan_mode", False)
+    # _create_todo_list_middleware 在 plan mode 下创建 TodoMiddleware，
+    # 它做三件事：被摘要截断后重新注入TodoList提醒、有未完成任务时拦截模型的提前退出并强制续约（最多 2 次）、run 切换时清理跨 run 的提醒队列防止污染。
     todo_list_middleware = _create_todo_list_middleware(is_plan_mode)
     if todo_list_middleware is not None:
         middlewares.append(todo_list_middleware)
 
     # Add TokenUsageMiddleware when token_usage tracking is enabled
     if resolved_app_config.token_usage.enabled:
+        # TokenUsageMiddleware 在每次模型返回后：打 token 日志、给 AIMessage 打上结构化的"这一步做了什么"归因标记（供前端渲染步骤卡片）、
+        # 并把已完成子 agent 的 token 消耗回写到派发它的 AIMessage 上。
         middlewares.append(TokenUsageMiddleware())
 
     # Add TitleMiddleware
+    # 根据第一个HumanMessage和AIMessage调用llm生成title，如果是同步或者没有配置title的llm，用user_msg兜底
+    # 前期是titleConfig是enable的
     middlewares.append(TitleMiddleware(app_config=resolved_app_config))
 
     # Add MemoryMiddleware (after TitleMiddleware)
+    # 给 agent 构建长期记忆——让它在下一次对话时还能记得用户的偏好、背景和历史上下文，而不是每次都从零开始。
+    #
+    # after_agent 之后消息存到哪里
+    # 整个链路是：
+    #
+    # after_agent
+    #   └─ queue.add(...)
+    #        └─ 内存队列（list[ConversationContext]）
+    #             └─ threading.Timer 30秒后触发
+    #                  └─ MemoryUpdater.update_memory()
+    #                       └─ LLM.invoke(MEMORY_UPDATE_PROMPT)  ← 调 LLM 提取记忆
+    #                            └─ _apply_updates()
+    #                                 └─ memory.json 文件
+    #                                      路径: .deer-flow/users/{user_id}/memory.json
+    # 最终落地在本地 JSON 文件，按用户隔离存储。
     middlewares.append(MemoryMiddleware(agent_name=agent_name, memory_config=resolved_app_config.memory))
 
     # Add ViewImageMiddleware only if the current model supports vision.
     # Use the resolved runtime model_name from make_lead_agent to avoid stale config values.
     model_config = resolved_app_config.get_model_config(model_name) if model_name else None
+    # 模型是否支持图片输入
     if model_config is not None and model_config.supports_vision:
+        # 在 LLM 调用前，把 view_image 工具读取到的图片 base64 数据注入到对话里，让 LLM 真正能"看到"图片内容。
+        #
+        # 为什么需要这个中间件
+        # view_image 工具执行后，图片数据存在 state.viewed_images 里，但 ToolMessage 里只有文字内容（"图片已加载"之类）。LLM 收到的是文字结果，看不到图片本身。
+        #
+        # 这个中间件在下次调用 LLM 前把实际图片内容（base64）构造成一条 HumanMessage 注入进去，LLM 才能真正分析图片。
+        #
+        # 触发条件（_should_inject_image_message）
+        # 四个条件全部满足才注入：
+        #
+        # 最后一条 AIMessage 包含 view_image tool_call
+        # 该 AIMessage 的所有 tool_call（不只是 view_image）都已有对应 ToolMessage
+        # state.viewed_images 里有图片数据
+        # 那条 AIMessage 后面还没有注入过图片消息（防重复）
+        # 注入的消息格式
+        # HumanMessage(
+        #     content=[
+        #         {"type": "text", "text": "Here are the images you've viewed:"},
+        #         {"type": "text", "text": "\n- **/mnt/user-data/uploads/chart.png** (image/png)"},
+        #         {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0K..."}},
+        #         # 多张图片继续追加...
+        #     ],
+        #     additional_kwargs={"hide_from_ui": True}  # 不显示在前端
+        # )
+        # 用多模态的 image_url 格式，让支持 vision 的 LLM 直接看到图片像素内容。hide_from_ui=True 保证这条消息只是给 LLM 看的内部上下文，不出现在用户界面上。
+        #
+        # 完整时序
+        # 用户: "帮我分析这张图表"
+        # Turn 1:
+        #   AIMessage(tool_calls=[view_image("/mnt/user-data/uploads/chart.png")])
+        #   ToolMessage("图片已读取，base64 存入 viewed_images")
+        # Turn 2（before_model 触发）:
+        #   ViewImageMiddleware 检测到上轮有已完成的 view_image
+        #   → 注入 HumanMessage(content=[text + image_url base64])
+        #   → LLM 调用时收到图片内容
+        #   → AIMessage("这张图表显示了...")
         middlewares.append(ViewImageMiddleware())
 
     # Hide deferred tool schemas from model binding until tool_search promotes them.
@@ -335,7 +409,8 @@ def build_middlewares(
     # after tool-policy filtering); promotion is read from graph state.
     if deferred_setup is not None and deferred_setup.deferred_names:
         from deerflow.agents.middlewares.deferred_tool_filter_middleware import DeferredToolFilterMiddleware
-
+        # 作用是在model调用时，将deferred且没有promote的工具剔除，不让llm看到。让llm使用tool_search来搜索deferred tools
+        # 在tool调用时，校验llm是否直接调用了deferred但没有promote的工具，返回一个错误的ToolMessage
         middlewares.append(DeferredToolFilterMiddleware(deferred_setup.deferred_names, deferred_setup.catalog_hash))
 
     # Add SubagentLimitMiddleware to truncate excess parallel task calls

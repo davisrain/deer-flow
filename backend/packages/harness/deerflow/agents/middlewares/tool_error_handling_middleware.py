@@ -79,6 +79,7 @@ class ToolErrorHandlingMiddleware(AgentMiddleware[AgentState]):
         # carries the same ``ExcClass: detail`` shape the wrapper string
         # uses so debugging artifacts stay aligned.
         structured_error = f"{exc.__class__.__name__}: {detail}"
+        # 如果是task工具调用，需要打上sub agent的执行状态到ToolMessage的additional_kwargs中
         return _stamp_task_subagent_status(message, tool_name=tool_name, error=structured_error)
 
     @staticmethod
@@ -106,7 +107,9 @@ class ToolErrorHandlingMiddleware(AgentMiddleware[AgentState]):
             raise
         except Exception as exc:
             logger.exception("Tool execution failed (sync): name=%s id=%s", request.tool_call.get("name"), request.tool_call.get("id"))
+            # 如果工具调用出现异常，转换为一个内容为异常信息的ToolMessage返回
             return self._build_error_message(request, exc)
+        # 如果是task工具调用，需要打上sub agent的执行状态到ToolMessage的additional_kwargs中
         return self._maybe_stamp(result, request)
 
     @override
@@ -141,20 +144,27 @@ def _build_runtime_middlewares(
 
     middlewares: list[AgentMiddleware] = [
         ToolOutputBudgetMiddleware.from_app_config(app_config),
+        # 在before_agent中创建thread_id user_id对应的thread_data目录
         ThreadDataMiddleware(lazy_init=lazy_init),
+        # 创建sandbox环境，LocalSandbox只映射路径，不做类似docker的进程/网络隔离
         SandboxMiddleware(lazy_init=lazy_init),
     ]
 
     if include_uploads:
         from deerflow.agents.middlewares.uploads_middleware import UploadsMiddleware
 
+        # 将uploads放在ThreadData之后，因为依赖读取上传目录中的文件信息
+        # 该middleware是将上传文件的内容添加进最后一个HumanMessage的Content中
         middlewares.insert(2, UploadsMiddleware())
 
     if include_dangling_tool_call_patch:
         from deerflow.agents.middlewares.dangling_tool_call_middleware import DanglingToolCallMiddleware
 
+        # LLM 的消息序列有一个严格约束：每个 AIMessage 中的 tool_call，必须在后续消息中有对应的 ToolMessage 回应，否则 OpenAI/Anthropic 等 provider 会返回 400 报错。
+        # middleware做的事情：1.补全缺失的 ToolMessage（主功能）；2.修复消息顺序错位（结构归位）；3.处理 invalid_tool_calls（malformed 场景）
         middlewares.append(DanglingToolCallMiddleware())
 
+    # 处理llm返回异常的middleware，封装了重试、熔断、降级等操作，将llm异常降级为AIMessages返回
     middlewares.append(LLMErrorHandlingMiddleware(app_config=app_config))
 
     # Guardrail middleware (if configured)
@@ -181,8 +191,10 @@ def _build_runtime_middlewares(
         middlewares.append(GuardrailMiddleware(provider, fail_closed=guardrails_config.fail_closed, passport=guardrails_config.passport))
 
     from deerflow.agents.middlewares.sandbox_audit_middleware import SandboxAuditMiddleware
-
+    # SandboxAuditMiddleware 是 bash 工具的安全检查站：每次 LLM 调用 bash 前，先做格式校验，再做 regex+shlex 双重风险分类，
+    # 高危命令直接拦截返回错误（agent 能继续运行），中危命令放行但在结果里注入警告让 LLM 知情，同时每条命令都留下可审计的结构化日志。
     middlewares.append(SandboxAuditMiddleware())
+    # 捕获所有工具执行异常转为错误 ToolMessage 让 agent 继续运行；同时对 task 工具的返回结果统一打上结构化 subagent_status 标记，替换掉前端原本脆弱的文本前缀解析契约。
     middlewares.append(ToolErrorHandlingMiddleware())
     return middlewares
 
