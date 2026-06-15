@@ -417,11 +417,15 @@ def build_middlewares(
     subagent_enabled = cfg.get("subagent_enabled", False)
     if subagent_enabled:
         max_concurrent_subagents = cfg.get("max_concurrent_subagents", 3)
+        # 限制subagent的task tool call的调用数量
         middlewares.append(SubagentLimitMiddleware(max_concurrent=max_concurrent_subagents))
 
     # LoopDetectionMiddleware — detect and break repetitive tool call loops
     loop_detection_config = resolved_app_config.loop_detection
     if loop_detection_config.enabled:
+        # LoopDetectionMiddleware 是一个 P0 级安全守卫，防止 agent 陷入无限工具调用循环直到 LangGraph 递归限制崩溃
+        # 处理方式分为两种：添加HumanMessage告警或者直接停止agent loop
+        # 判断方式分为两种：一种是对tool_calls计算hash，一种是统计同一个工具的调用频率
         middlewares.append(LoopDetectionMiddleware.from_config(loop_detection_config))
 
     # Inject custom middlewares before ClarificationMiddleware
@@ -435,6 +439,44 @@ def build_middlewares(
     # firing extra alarms. See safety_finish_reason_middleware.py docstring.
     safety_config = resolved_app_config.safety_finish_reason
     if safety_config.enabled:
+        # SafetyFinishReasonMiddleware 解决的是一个特定的 provider 行为问题：模型因安全拦截而中途截断响应时，仍可能携带半截的 tool_calls，如果任由 LangChain 执行，会导致参数不完整的工具被调用，然后循环失败。
+        #
+        # 核心问题场景（issue #3028）
+        # 模型生成 write_file(content="# 报告\n\n## 第一章...")
+        #   ↓ 安全过滤触发，生成中断
+        # AIMessage {
+        #   tool_calls: [write_file(content="# 报告\n\n## 第一章...【截断】")]
+        #   finish_reason: "content_filter"   ← 安全信号
+        # }
+        #   ↓ 没有本中间件时
+        # LangChain ToolRouter 看到 tool_calls 非空 → 去执行
+        #   → 写入截断的文件
+        #   → agent 看到残缺文件，尝试修复
+        #   → 再次触发安全过滤
+        #   → 无限循环
+        # 处理流程
+        # after_model 触发
+        #     ↓
+        # 最后一条消息是 AIMessage 且有 tool_calls？
+        #     ↓ 是
+        # 逐个 detector 检测 → 有命中？
+        #     ↓ 是
+        # _build_suppressed_message：
+        #   1. 清空 tool_calls（结构化 + additional_kwargs 原始元数据）
+        #   2. 向 content 追加用户可读解释文字
+        #   3. 保留原始 finish_reason（content_filter/refusal/SAFETY 不改写）
+        #   4. 在 additional_kwargs["safety_termination"] 写入可观测性记录
+        #     ↓
+        # _emit_event → 向 SSE 推送 safety_termination 事件（前端消除 "工具启动中..." 占位）
+        # _record_audit_event → 写入 RunJournal 持久化（只记录工具名/id，不记录参数内容）
+        #     ↓
+        # 返回改写后的 AIMessage，tool_calls 已清空 → 工具不会被执行
+        # 三个内置 Detector
+        # Detector	检测字段	触发值	覆盖 Provider
+        # OpenAICompatibleContentFilterDetector	finish_reason	content_filter（可扩展）	OpenAI、Azure、Moonshot、DeepSeek、vLLM 等
+        # AnthropicRefusalDetector	stop_reason	refusal	Claude
+        # GeminiSafetyDetector	finish_reason	SAFETY/BLOCKLIST/PROHIBITED_CONTENT 等8种	Gemini/Vertex AI
+        # 检测字段同时查 response_metadata 和 additional_kwargs，兼容新旧版本 LangChain 适配器的不同存放位置。
         middlewares.append(SafetyFinishReasonMiddleware.from_config(safety_config))
 
     # ClarificationMiddleware should always be last

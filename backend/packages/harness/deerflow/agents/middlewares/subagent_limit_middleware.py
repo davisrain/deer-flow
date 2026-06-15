@@ -52,11 +52,13 @@ class SubagentLimitMiddleware(AgentMiddleware[AgentState]):
             return None
 
         # Count task tool calls
+        # 统计AIMessage中有多少个name为task的tool_call
         task_indices = [i for i, tc in enumerate(tool_calls) if tc.get("name") == "task"]
         if len(task_indices) <= self.max_concurrent:
             return None
 
         # Build set of indices to drop (excess task calls beyond the limit)
+        # 截取掉超出限制的subagent调用
         indices_to_drop = set(task_indices[self.max_concurrent :])
         truncated_tool_calls = [tc for i, tc in enumerate(tool_calls) if i not in indices_to_drop]
 

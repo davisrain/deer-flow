@@ -72,6 +72,7 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
         # Some models (e.g. Qwen3-Max) serialize array parameters as JSON strings
         # instead of native arrays. Deserialize and normalize so `options`
         # is always a list for the rendering logic below.
+        # 如果options是str类型的，转换成列表的形式
         if isinstance(options, str):
             try:
                 options = json.loads(options)
@@ -84,6 +85,7 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
             options = [options]
 
         # Type-specific icons
+        # 根据澄清类型选择对应的icon
         type_icons = {
             "missing_info": "❓",
             "ambiguous_requirement": "🤔",
@@ -98,6 +100,7 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
         message_parts = []
 
         # Add icon and question together for a more natural flow
+        # 组装icon context question
         if context:
             # If there's context, present it first as background
             message_parts.append(f"{icon} {context}")
@@ -107,6 +110,7 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
             message_parts.append(f"{icon} {question}")
 
         # Add options in a cleaner format
+        # 如果options存在，组装options
         if options and len(options) > 0:
             message_parts.append("")  # blank line for spacing
             for i, option in enumerate(options, 1):
@@ -124,6 +128,7 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
             Command that interrupts execution with the formatted clarification message
         """
         # Extract clarification arguments
+        # 将question从tool_call的args提取出来
         args = request.tool_call.get("args", {})
         question = args.get("question", "")
 
@@ -131,6 +136,7 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
         logger.debug("Clarification question: %s", question)
 
         # Format the clarification message
+        # 格式化需要澄清的信息
         formatted_message = self._format_clarification_message(args)
 
         # Get the tool call ID

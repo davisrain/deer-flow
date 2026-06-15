@@ -225,6 +225,8 @@ def build_run_config(
         # pass thread-level data and rejects requests that include both
         # ``configurable`` and ``context``.  If the caller already sends
         # ``context``, honour it and skip our own ``configurable`` dict.
+
+        # 如果context和configurable都存在，优先用context的内容
         if "context" in request_config:
             if "configurable" in request_config:
                 logger.warning(
@@ -240,13 +242,16 @@ def build_run_config(
             else:
                 raise ValueError("request config 'context' must be a mapping or null.")
             config["context"] = context
+        # 如果context不存在
         else:
+            # 在config中设置configurable
             configurable = {"thread_id": thread_id}
             configurable.update(request_config.get("configurable", {}))
             config["configurable"] = configurable
         for k, v in request_config.items():
             if k not in ("configurable", "context"):
                 config[k] = v
+    # 如果request_config不存在，直接在config中添加{configurable: {thread_id: xx}}
     else:
         config["configurable"] = {"thread_id": thread_id}
 
@@ -292,10 +297,13 @@ async def start_run(
     request : Request
         FastAPI request — used to retrieve singletons from ``app.state``.
     """
+    # 获取stream_bridge，用于推送stream event给前端
     bridge = get_stream_bridge(request)
     run_mgr = get_run_manager(request)
+    # 创建RunContext
     run_ctx = get_run_context(request)
 
+    # 客户端中断之后后台应用的操作
     disconnect = DisconnectMode.cancel if body.on_disconnect == "cancel" else DisconnectMode.continue_
 
     body_context = getattr(body, "context", None) or {}
@@ -308,6 +316,7 @@ async def start_run(
     # Validate model against the allowlist when a model_name is provided.
     if model_name:
         app_config = get_app_config()
+        # 获取模型配置，没有获取到抛出异常
         resolved = app_config.get_model_config(model_name)
         if resolved is None:
             raise HTTPException(
@@ -322,6 +331,7 @@ async def start_run(
             on_disconnect=disconnect,
             metadata=body.metadata or {},
             kwargs={"input": body.input, "config": body.config},
+            # 当一个thread_id运行多个run时，后运行的那个run的执行策略
             multitask_strategy=body.multitask_strategy,
             model_name=model_name,
         )
@@ -334,6 +344,10 @@ async def start_run(
     # even for threads that were never explicitly created via POST /threads
     # (e.g. stateless runs).
     try:
+        # 创建或者更新thread的数据
+        # thread_store	thread 的外壳：标题、状态、归属用户
+        # run_store	每次 run 的执行记录：状态、token 用量、耗时
+        # checkpointer	thread 的对话内容：完整的 LangGraph 状态快照，是多轮记忆的来源
         existing = await run_ctx.thread_store.get(thread_id)
         if existing is None:
             await run_ctx.thread_store.create(
@@ -346,8 +360,11 @@ async def start_run(
     except Exception:
         logger.warning("Failed to upsert thread_meta for %s (non-fatal)", sanitize_log_param(thread_id))
 
+    # 获取make_lead_agent
     agent_factory = resolve_agent_factory(body.assistant_id)
+    # 将input中的messages规范化，转换为BaseMessage的子类
     graph_input = normalize_input(body.input)
+    # 构建langgraph运行时的RunnableConfig
     config = build_run_config(thread_id, body.config, body.metadata, assistant_id=body.assistant_id)
 
     # Merge DeerFlow-specific context overrides into both ``configurable`` and ``context``.

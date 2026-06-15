@@ -86,6 +86,7 @@ class RunRecord:
     created_at: str = ""
     updated_at: str = ""
     task: asyncio.Task | None = field(default=None, repr=False)
+    # default_factory会在创建的时候直接调用Event()生成一个信号旗
     abort_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
     abort_action: str = "interrupt"
     error: str | None = None
@@ -521,14 +522,16 @@ class RunManager:
         interrupted_records: list[RunRecord] = []
 
         async with self._lock:
+            # 检查multitask_strategy是否支持，不支持报错
             if multitask_strategy not in _supported_strategies:
                 raise UnsupportedStrategyError(f"Multitask strategy '{multitask_strategy}' is not yet supported. Supported strategies: {', '.join(_supported_strategies)}")
-
+            # 找到当前thread_id正在等待或者正在跑的RunRecord
             inflight = [r for r in self._runs.values() if r.thread_id == thread_id and r.status in (RunStatus.pending, RunStatus.running)]
 
+            # 如果策略是拒绝，并且存在正在跑的run，报错
             if multitask_strategy == "reject" and inflight:
                 raise ConflictError(f"Thread {thread_id} already has an active run")
-
+            # 如果策略是中断或者回滚，并且存在正在跑的run，准备将正在跑的run取消
             if multitask_strategy in ("interrupt", "rollback") and inflight:
                 logger.info(
                     "Preparing to cancel %d inflight run(s) on thread %s (strategy=%s)",
@@ -537,6 +540,7 @@ class RunManager:
                     multitask_strategy,
                 )
 
+            # 创建一个新的RunRecord
             record = RunRecord(
                 run_id=run_id,
                 thread_id=thread_id,
@@ -550,9 +554,11 @@ class RunManager:
                 updated_at=now,
                 model_name=model_name,
             )
+            # 将新的RunRecord放入RunManager中
             self._runs[run_id] = record
             persisted = False
             try:
+                # 将新的RunRecord持久化
                 await self._persist_new_run_to_store(record)
                 persisted = True
             except Exception:
@@ -560,19 +566,27 @@ class RunManager:
                 raise
             finally:
                 # Also covers cancellation, which bypasses ``except Exception``.
+                # 如果持久化失败了，将其从RunManager中移除
                 if not persisted:
                     self._runs.pop(run_id, None)
 
+            # 遍历那些正在跑的run
             if multitask_strategy in ("interrupt", "rollback") and inflight:
                 for r in inflight:
                     r.abort_action = multitask_strategy
+                    # 这里设置信号旗，在worker.py中遍历处理stream的chunk的时候会读这个标志位，识别已经被中断
+                    # 然后根据abort_action决定是回滚还是直接中断
                     r.abort_event.set()
+                    # 如果RunRecord存在task了，就是跑agent loop的任务，调用cancel取消掉
                     if r.task is not None and not r.task.done():
                         r.task.cancel()
+                    # 将状态设置为 被中断
                     r.status = RunStatus.interrupted
                     r.updated_at = now
+                    # 收集这些被中断的RunRecord
                     interrupted_records.append(r)
 
+        # 遍历这些被中断的RunRecord，持久化更新它们的状态
         for interrupted_record in interrupted_records:
             await self._persist_status(interrupted_record, RunStatus.interrupted)
         logger.info("Run created: run_id=%s thread_id=%s", run_id, thread_id)

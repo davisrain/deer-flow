@@ -344,6 +344,7 @@ class LoopDetectionMiddleware(AgentMiddleware[AgentState]):
             return None, False
 
         thread_id = self._get_thread_id(runtime)
+        # 计算tool_calls的hash
         call_hash = _hash_tool_calls(tool_calls)
 
         with self._lock:
@@ -352,23 +353,30 @@ class LoopDetectionMiddleware(AgentMiddleware[AgentState]):
                 self._history.move_to_end(thread_id)
             else:
                 self._history[thread_id] = []
+                # 如果超出lru的大小，将需要过期的那条删除
+                # 追踪的thread_id默认100
                 self._evict_if_needed()
 
             history = self._history[thread_id]
             history.append(call_hash)
+            # 如果同一个thread_id追踪的tool_calls hash超过了窗口大小，将前面添加的删除
+            # window_size默认20
             if len(history) > self.window_size:
                 history[:] = history[-self.window_size :]
 
+            # 和需要提醒的hash集合进行交集，如果已经不存在交集了，将thread_id从需要提醒的hash中删除
             warned_hashes = self._warned.get(thread_id)
             if warned_hashes is not None:
                 warned_hashes.intersection_update(history)
                 if not warned_hashes:
                     self._warned.pop(thread_id, None)
 
+            # 统计该hash在历史中出现了多少次
             count = history.count(call_hash)
             tool_names = [tc.get("name", "?") for tc in tool_calls]
 
             # --- Layer 1: hash-based (identical call sets) ---
+            # 如果超过hard limit次数（默认5次），需要直接报错停止agent loop。
             if count >= self.hard_limit:
                 logger.error(
                     "Loop hard limit reached — forcing stop",
@@ -381,6 +389,7 @@ class LoopDetectionMiddleware(AgentMiddleware[AgentState]):
                 )
                 return _HARD_STOP_MSG, True
 
+            # 如果仅仅超过warn_threshold（默认3次），需要在下一轮请求llm前加入一条提示的HumanMessage。
             if count >= self.warn_threshold:
                 warned = self._warned[thread_id]
                 if call_hash not in warned:
@@ -397,6 +406,7 @@ class LoopDetectionMiddleware(AgentMiddleware[AgentState]):
                     return _WARNING_MSG, False
 
             # --- Layer 2: per-tool-type frequency ---
+            # 第二层是统计调用tool的次数
             freq = self._tool_freq[thread_id]
             for tc in tool_calls:
                 name = tc.get("name", "")
@@ -405,6 +415,7 @@ class LoopDetectionMiddleware(AgentMiddleware[AgentState]):
                 freq[name] += 1
                 tc_count = freq[name]
 
+                # 查看该工具是否有自定义的告警阈值和失败阈值，如果没有，用通用的30次和50次
                 if name in self._tool_freq_overrides:
                     eff_warn, eff_hard = self._tool_freq_overrides[name]
                 else:
@@ -482,6 +493,7 @@ class LoopDetectionMiddleware(AgentMiddleware[AgentState]):
             # Once tool_calls are stripped, the AIMessage no longer requires
             # matching ToolMessage responses, so mutating it in place here
             # is safe for OpenAI/Moonshot pairing validators.
+            # 如果是强制停止，修改最后一条AIMessage，将警告内容填入，并且将tool_calls删除，让agent loop直接结束
             messages = state.get("messages", [])
             last_msg = messages[-1]
             content = self._append_text(last_msg.content, warning or _HARD_STOP_MSG)
@@ -496,6 +508,8 @@ class LoopDetectionMiddleware(AgentMiddleware[AgentState]):
             # (would break OpenAI/Moonshot tool-call pairing because the
             # tools node has not produced ToolMessage responses yet). The
             # warning is delivered via ``wrap_model_call`` below.
+            # 如果是告警，将告警内容添加进队列，在下一次调用llm前添加一条HumanMessage
+            # wrap_model_call的时候会读取这个队列
             self._queue_pending_warning(runtime, warning)
             return None
 

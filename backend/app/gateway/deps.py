@@ -286,11 +286,17 @@ def get_run_context(request: Request) -> RunContext:
     to one backend paired with a config pointing at another.
     """
     return RunContext(
+        # 保存/恢复对话状态（多轮记忆）
         checkpointer=get_checkpointer(request),
+        # 跨线程共享数据（用户记忆等）
         store=get_store(request),
+        # 记录运行过程事件（token/消息/工具调用）
         event_store=get_run_event_store(request),
+        # event_store 的配置开关，启动时冻结
         run_events_config=getattr(request.app.state, "run_events_config", None),
+        # thread 元数据（标题、状态、归属）
         thread_store=get_thread_store(request),
+        # 当前 config.yaml 配置，每次请求热读
         app_config=get_config(),
     )
 
