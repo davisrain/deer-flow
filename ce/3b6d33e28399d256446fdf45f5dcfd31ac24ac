@@ -1,0 +1,26 @@
+backend/packages/harness/deerflow/agents/middlewares/subagent_limit_middleware.py
+  h_80ca37e46d63b9 55,61
+backend/packages/harness/deerflow/runtime/runs/manager.py
+  h_80ca37e46d63b9 89,525,528,531,534,543,557,561,569,573,577-578,580,583,586,589
+backend/packages/harness/deerflow/agents/middlewares/clarification_middleware.py
+  h_80ca37e46d63b9 75,88,103,113,131,139
+backend/packages/harness/deerflow/agents/lead_agent/agent.py
+  h_80ca37e46d63b9 420,426-428,442-479
+backend/packages/harness/deerflow/agents/middlewares/loop_detection_middleware.py
+  h_80ca37e46d63b9 347,356-357,362-363,367,374,379,392,409,418,496,511-512
+backend/app/gateway/services.py
+  h_80ca37e46d63b9 228-229,245,247,254,300,303,306,319,334,347-350,363,365,367
+backend/app/gateway/deps.py
+  h_80ca37e46d63b9 289,291,293,295,297,299
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.10-trip",
+  "base_commit_sha": "ce3b6d33e28399d256446fdf45f5dcfd31ac24ac",
+  "prompts": {},
+  "humans": {
+    "h_80ca37e46d63b9": {
+      "author": "zhengyudai <zhengyu_dai@foxmail.com>"
+    }
+  }
+}
