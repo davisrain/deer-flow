@@ -1,0 +1,18 @@
+backend/app/gateway/deps.py
+  h_80ca37e46d63b9 174-179
+backend/app/gateway/services.py
+  h_80ca37e46d63b9 156,163,253,263,277,372,379,383,386,388,403
+backend/packages/harness/deerflow/runtime/runs/worker.py
+  h_80ca37e46d63b9 171,187,193,195,197,209,227-228,230,237-238,240,242,247-248,268-307,309-310,320-321,330,337,374,464,474,480,494,502,504
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.17-trip",
+  "base_commit_sha": "b9ac59cd2fe911eed32fa52b8b3d2b371aa1718b",
+  "prompts": {},
+  "humans": {
+    "h_80ca37e46d63b9": {
+      "author": "zhengyudai <zhengyu_dai@foxmail.com>"
+    }
+  }
+}
