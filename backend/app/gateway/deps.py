@@ -171,6 +171,12 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
     from deerflow.runtime.checkpointer.async_provider import make_checkpointer
     from deerflow.runtime.events.store import make_run_event_store
 
+    # 用于处理多个async with的嵌套，特别是动态的场景
+    # 如果不用这种模式，会不停的嵌套
+    # async with A() as a:
+    #   async with B() as b:
+    #       async with C() as c:
+    #           yield
     async with AsyncExitStack() as stack:
         config = startup_config
 

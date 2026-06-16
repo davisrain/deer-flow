@@ -168,6 +168,7 @@ async def run_agent(
         # path that publishes an "end" event to the SSE bridge —
         # otherwise a failure here would leave the stream hanging
         # with no terminator.
+        # RunJournal 作为 LangChain CallbackHandler 注入，负责全程记录 token 用量、LLM 调用次数、消息内容，最终写入 event_store（即 GET /runs/{id}/events 查到的数据）。
         if event_store is not None:
             from deerflow.runtime.journal import RunJournal
 
@@ -183,13 +184,17 @@ async def run_agent(
         await run_manager.set_status(run_id, RunStatus.running)
 
         # Snapshot the latest pre-run checkpoint so rollback can restore it.
+        # 从checkpointer中查找thread_id对应的最新的snapshot
         if checkpointer is not None:
             try:
                 config_for_check = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
                 ckpt_tuple = await checkpointer.aget_tuple(config_for_check)
                 if ckpt_tuple is not None:
+                    # 获取checkpoint的configurable配置
                     ckpt_config = getattr(ckpt_tuple, "config", {}).get("configurable", {})
+                    # 获取上一次运行的checkpoint_id
                     pre_run_checkpoint_id = ckpt_config.get("checkpoint_id")
+                    # 获取上一次运行的checkpoint快照
                     pre_run_snapshot = {
                         "checkpoint_ns": ckpt_config.get("checkpoint_ns", ""),
                         "checkpoint": copy.deepcopy(getattr(ckpt_tuple, "checkpoint", {})),
@@ -201,6 +206,7 @@ async def run_agent(
                 logger.warning("Could not capture pre-run checkpoint snapshot for run %s", run_id, exc_info=True)
 
         # 2. Publish metadata — useStream needs both run_id AND thread_id
+        # 推送metadata类型的数据给consumer，包含thread_id和run_id
         await bridge.publish(
             run_id,
             "metadata",
@@ -218,19 +224,28 @@ async def run_agent(
         # access thread-level data. langgraph-cli does this automatically; we must do it
         # manually here because we drive the graph through ``agent.astream(config=...)``
         # without passing the official ``context=`` parameter.
+
+        # 构建agent loop使用过的runtime_ctx， 从config的context中获取
         runtime_ctx = _build_runtime_context(thread_id, run_id, config.get("context"), ctx.app_config)
+
         # Expose the run-scoped journal under a sentinel key so middleware can
         # write audit events (e.g. SafetyFinishReasonMiddleware recording
         # suppressed tool calls). Double-underscore prefix marks it as a
         # runtime-internal channel; user code must not depend on the key name.
         if journal is not None:
             runtime_ctx["__run_journal"] = journal
+
+        # 再将config中的context替换成runtime_ctx
         _install_runtime_context(config, runtime_ctx)
+        # 将runtime_ctx构建成Runtime对象
         runtime = Runtime(context=cast(Any, runtime_ctx), store=store)
+        # 设置进config的configurable中，langgraph会自动将其转换成运行时的context
         config.setdefault("configurable", {})["__pregel_runtime"] = runtime
 
         # Inject RunJournal as a LangChain callback handler.
         # on_llm_end captures token usage; on_chain_start/end captures lifecycle.
+
+        # 将RunJournal注册为langchain的callback handler，用于获取token使用量
         if journal is not None:
             config.setdefault("callbacks", []).append(journal)
 
@@ -250,7 +265,49 @@ async def run_agent(
         # Resolve after runtime context installation so context/configurable reflect
         # the agent name that this run will actually execute.
         config.setdefault("run_name", resolve_root_run_name(config, record.assistant_id))
+
+        # 最终构建好要传入agent loop的RunnableConfig
+        # RunnableConfig(**{
+        #     # ── 来自 build_run_config ──────────────────────────
+        #     "recursion_limit": 100,
+        #     "run_name": "lead_agent",
+        #
+        #     # ── 来自 build_run_config + 多方合并 ──────────────
+        #     "configurable": {
+        #         "thread_id": "thread-xxx",           # build_run_config
+        #         "model_name": "claude-opus-4-5",     # body.context → merge_run_context_overrides
+        #         "thinking_enabled": True,            # body.context → merge_run_context_overrides
+        #         "is_plan_mode": False,               # body.context → merge_run_context_overrides
+        #         "subagent_enabled": True,            # body.context → merge_run_context_overrides
+        #         "agent_name": "my-agent",            # body.assistant_id / body.context
+        #         "__pregel_runtime": <Runtime对象>,   # _install_runtime_context（LangGraph内部用）
+        #     },
+        #
+        #     # ── 来自 _install_runtime_context / body.context ──
+        #     "context": {
+        #         "thread_id": "thread-xxx",           # _install_runtime_context
+        #         "run_id": "run-yyy",                 # _install_runtime_context
+        #         "app_config": <AppConfig对象>,       # _install_runtime_context
+        #         "user_id": "auth-user-id",           # inject_authenticated_user_context（服务端权威）
+        #         "model_name": "claude-opus-4-5",     # body.context → merge_run_context_overrides
+        #         # ... 其他 body.context 白名单字段
+        #     },
+        #
+        #     # ── 来自 body.metadata + inject_langfuse_metadata ─
+        #     "metadata": {
+        #         # body.metadata 透传字段
+        #         "langfuse_session_id": "thread-xxx", # inject_langfuse_metadata
+        #         "langfuse_user_id": "default",       # inject_langfuse_metadata
+        #         "langfuse_trace_name": "lead_agent", # inject_langfuse_metadata
+        #         "langfuse_tags": ["env:prod", ...],  # inject_langfuse_metadata
+        #     },
+        #
+        #     # ── 来自 worker.py ─────────────────────────────────
+        #     "callbacks": [<RunJournal>],             # token统计 / 事件记录
+        # })
         runnable_config = RunnableConfig(**config)
+
+        # 调用agent_factory生成agent
         if ctx.app_config is not None and _agent_factory_supports_app_config(agent_factory):
             agent = agent_factory(config=runnable_config, app_config=ctx.app_config)
         else:
@@ -260,6 +317,8 @@ async def run_agent(
         # _resolve_model_name in agent.py may return the default model if the
         # requested name is not in the allowlist — this update ensures the
         # persisted model_name reflects the actual model used.
+
+        # 如果agent解析出来的model_name不一样的话，替换RunRecord持有的model_name
         if record.model_name is not None:
             resolved = getattr(agent, "metadata", {}) or {}
             if isinstance(resolved, dict):
@@ -268,12 +327,14 @@ async def run_agent(
                     await run_manager.update_model_name(record.run_id, effective)
 
         # 4. Attach checkpointer and store
+        # 将checkpointer和 store都传入agent中
         if checkpointer is not None:
             agent.checkpointer = checkpointer
         if store is not None:
             agent.store = store
 
         # 5. Set interrupt nodes
+        # 设置interrupt nodes
         if interrupt_before:
             agent.interrupt_before_nodes = interrupt_before
         if interrupt_after:
@@ -310,6 +371,7 @@ async def run_agent(
             # Single mode, no subgraphs: astream yields raw chunks
             single_mode = lg_modes[0]
             async for chunk in agent.astream(graph_input, config=runnable_config, stream_mode=single_mode):
+                # 如果RunRecord被其他run设置了信号旗，退出循环，停止loop
                 if record.abort_event.is_set():
                     logger.info("Run %s abort requested — stopping", run_id)
                     break
@@ -399,6 +461,7 @@ async def run_agent(
 
     finally:
         # Flush any buffered journal events and persist completion data
+        # 把 journal 里缓冲的事件全部刷入 event_store
         if journal is not None:
             try:
                 await journal.flush()
@@ -408,11 +471,13 @@ async def run_agent(
             try:
                 # Persist token usage + convenience fields to RunStore
                 completion = journal.get_completion_data()
+                # 把 token 用量写入 RunStore（run 完成数据）
                 await run_manager.update_run_completion(run_id, status=record.status.value, **completion)
             except Exception:
                 logger.warning("Failed to persist run completion for %s (non-fatal)", run_id, exc_info=True)
 
         # Sync title from checkpoint to threads_meta.display_name
+        # 从 checkpoint 读取 AI 生成的标题，写入 thread_store.display_name
         if checkpointer is not None and thread_store is not None:
             try:
                 ckpt_config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
@@ -426,6 +491,7 @@ async def run_agent(
                 logger.debug("Failed to sync title for thread %s (non-fatal)", thread_id)
 
         # Update threads_meta status based on run outcome
+        # 更新 thread 状态（running → idle）
         if thread_store is not None:
             try:
                 final_status = "idle" if record.status == RunStatus.success else record.status.value
@@ -433,7 +499,9 @@ async def run_agent(
             except Exception:
                 logger.debug("Failed to update thread_meta status for %s (non-fatal)", thread_id)
 
+        # 推送 END 事件，通知前端流结束
         await bridge.publish_end(run_id)
+        # 60 秒后清理 bridge 里这个 run 的队列
         asyncio.create_task(bridge.cleanup(run_id, delay=60))
 
 

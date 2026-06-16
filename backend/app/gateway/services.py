@@ -153,12 +153,14 @@ def merge_run_context_overrides(config: dict[str, Any], context: Mapping[str, An
         return
     configurable = config.setdefault("configurable", {})
     runtime_context = config.setdefault("context", {})
+    # 将白名单中的属性依次放入configurable和context中
     for key in _CONTEXT_CONFIGURABLE_KEYS:
         if key in context:
             if isinstance(configurable, dict):
                 configurable.setdefault(key, context[key])
             if isinstance(runtime_context, dict):
                 runtime_context.setdefault(key, context[key])
+    # 如果body的context中存在user_id，并且runtime_context是字典类型，将user_id放入runtime_context
     if "user_id" in context and isinstance(runtime_context, dict):
         runtime_context.setdefault("user_id", context["user_id"])
 
@@ -248,6 +250,7 @@ def build_run_config(
             configurable = {"thread_id": thread_id}
             configurable.update(request_config.get("configurable", {}))
             config["configurable"] = configurable
+        # 将request_config中不属于configurable和context的都放入config中
         for k, v in request_config.items():
             if k not in ("configurable", "context"):
                 config[k] = v
@@ -257,6 +260,7 @@ def build_run_config(
 
     # Inject custom agent name when the caller specified a non-default assistant.
     # Honour an explicit agent_name in the active runtime options container.
+    # 添加自定义的agent名称到config中
     if assistant_id and assistant_id != _DEFAULT_ASSISTANT_ID:
         normalized = assistant_id.strip().lower().replace("_", "-")
         if not normalized or not re.fullmatch(r"[a-z0-9-]+", normalized):
@@ -270,6 +274,7 @@ def build_run_config(
         if target is not None and "agent_name" not in target:
             target["agent_name"] = normalized
         config.setdefault("run_name", resolve_root_run_name(config, normalized))
+    # 在config中添加metadata
     if metadata:
         config.setdefault("metadata", {}).update(metadata)
     return config
@@ -364,19 +369,23 @@ async def start_run(
     agent_factory = resolve_agent_factory(body.assistant_id)
     # 将input中的messages规范化，转换为BaseMessage的子类
     graph_input = normalize_input(body.input)
-    # 构建langgraph运行时的RunnableConfig
+    # 构建langgraph运行时的RunnableConfig，有context的时候，优先使用context，其次使用configurable
     config = build_run_config(thread_id, body.config, body.metadata, assistant_id=body.assistant_id)
 
     # Merge DeerFlow-specific context overrides into both ``configurable`` and ``context``.
     # The ``context`` field is a custom extension for the langgraph-compat layer
     # that carries agent configuration (model_name, thinking_enabled, etc.).
     # Only agent-relevant keys are forwarded; unknown keys (e.g. thread_id) are ignored.
+    # 将body中的context的内容添加进RunnableConfig中
     merge_run_context_overrides(config, getattr(body, "context", None))
     inject_authenticated_user_context(config, request)
 
+    # 将stream mode规范化为list
     stream_modes = normalize_stream_modes(body.stream_mode)
 
+    # 在事件循环中创建任务
     task = asyncio.create_task(
+        # 创建一个run_agent的coroutine
         run_agent(
             bridge,
             run_mgr,
@@ -391,6 +400,7 @@ async def start_run(
             interrupt_after=body.interrupt_after,
         )
     )
+    # 并且将任务设置进RunRecord的task字段中
     record.task = task
 
     # Title sync is handled by worker.py's finally block which reads the
