@@ -140,6 +140,7 @@ def get_enabled_skills_for_config(app_config: AppConfig | None = None) -> list[S
         return _get_enabled_skills()
 
     cache_key = id(app_config)
+    # 尝试从缓存中获取
     with _enabled_skills_lock:
         cached = _enabled_skills_by_config_cache.get(cache_key)
         if cached is not None:
@@ -147,7 +148,9 @@ def get_enabled_skills_for_config(app_config: AppConfig | None = None) -> list[S
             if cached_config is app_config:
                 return list(cached_skills)
 
+    # 缓存未命中，使用skill_storage去加载skills
     skills = list(get_or_new_skill_storage(app_config=app_config).load_skills(enabled_only=True))
+    # 加锁，写入缓存
     with _enabled_skills_lock:
         _enabled_skills_by_config_cache[cache_key] = (app_config, skills)
     return list(skills)
@@ -607,6 +610,7 @@ def _get_cached_skills_prompt_section(
     container_base_path: str,
     skill_evolution_section: str,
 ) -> str:
+    # 将skills根据available_skills_key过滤一下
     filtered = [(name, description, category, location) for name, description, category, location in skill_signature if available_skills_key is None or name in available_skills_key]
     skills_list = ""
     if filtered:
@@ -634,6 +638,7 @@ You have access to skills that provide optimized workflows for specific tasks. E
 
 def get_skills_prompt_section(available_skills: set[str] | None = None, *, app_config: AppConfig | None = None) -> str:
     """Generate the skills prompt section with available skills list."""
+    # 从app_config中去获取启用的skills
     skills = get_enabled_skills_for_config(app_config)
 
     if app_config is None:
@@ -650,14 +655,17 @@ def get_skills_prompt_section(available_skills: set[str] | None = None, *, app_c
         config = app_config
         container_base_path = config.skills.container_path
         skill_evolution_enabled = config.skill_evolution.enabled
-
+    # 如果skills不存在 且 自进化的skill也没有开启，直接返回空
     if not skills and not skill_evolution_enabled:
         return ""
 
+    # 如果available_skills存在，且所有的skill都不在available_skills中，返回空
     if available_skills is not None and not any(skill.name in available_skills for skill in skills):
         return ""
 
+    # 将skill的name description category SKILL.md文件对应的地址整合成skill的标签
     skill_signature = tuple((skill.name, skill.description, skill.category, skill.get_container_file_path(container_base_path)) for skill in skills)
+    # 获取允许的skills，如果没有 就是None
     available_key = tuple(sorted(available_skills)) if available_skills is not None else None
     if not skill_signature and available_key is not None:
         return ""

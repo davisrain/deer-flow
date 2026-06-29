@@ -217,7 +217,9 @@ class SkillStorage(ABC):
         from deerflow.skills.parser import parse_skill_file
 
         skills_by_name: dict[str, Skill] = {}
+        # 遍历skill对应的目录，拿到对应public custom下的skill文件夹以及对应的md文件
         for category, category_root, md_path in self._iter_skill_files():
+            # 解析md文件
             skill = parse_skill_file(
                 md_path,
                 category=category,
@@ -226,10 +228,12 @@ class SkillStorage(ABC):
             if skill:
                 skills_by_name[skill.name] = skill
 
+        # 收集解析出来的Skill对象列表
         skills = list(skills_by_name.values())
 
         # Merge enabled state from extensions config (re-read every call so
         # changes made by another process are picked up immediately).
+        # 根据extension_config决定该skill是否enable，如果不配置，默认是true
         try:
             from deerflow.config.extensions_config import ExtensionsConfig
 

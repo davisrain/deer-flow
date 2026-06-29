@@ -64,10 +64,13 @@ class LocalSkillStorage(SkillStorage):
     def _iter_skill_files(self) -> Iterable[tuple[SkillCategory, Path, Path]]:
         if not self._host_root.exists():
             return
+        # 遍历public和custom目录
         for category in SkillCategory:
             category_path = self._host_root / category.value
             if not category_path.exists() or not category_path.is_dir():
                 continue
+            # 拿到对应的当前目录、子目录、文件列表
+            # 比如a/b/c.txt a/d.txt，walk到a的时候返回的是(a, [b], [d.txt])，walk到b的时候返回的是(a/b, [], [c.txt])
             for current_root, dir_names, file_names in os.walk(category_path, followlinks=True):
                 dir_names[:] = sorted(name for name in dir_names if not name.startswith("."))
                 if SKILL_MD_FILE not in file_names:
