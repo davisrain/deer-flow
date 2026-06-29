@@ -1,0 +1,18 @@
+backend/packages/harness/deerflow/skills/storage/skill_storage.py
+  h_80ca37e46d63b9 220,222,231,236
+backend/packages/harness/deerflow/agents/lead_agent/prompt.py
+  h_80ca37e46d63b9 143,151,153,613,641,658,662,666,668
+backend/packages/harness/deerflow/skills/storage/local_skill_storage.py
+  h_80ca37e46d63b9 67,72-73
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.24-trip",
+  "base_commit_sha": "5b126ea4263de1eab8263d3cc3e49386a8616810",
+  "prompts": {},
+  "humans": {
+    "h_80ca37e46d63b9": {
+      "author": "zhengyudai <zhengyu_dai@foxmail.com>"
+    }
+  }
+}
