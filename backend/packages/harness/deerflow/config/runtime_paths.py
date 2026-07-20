@@ -6,13 +6,17 @@ from pathlib import Path
 
 def project_root() -> Path:
     """Return the caller project root for runtime-owned files."""
+    # 如果环境变量DEER_FLOW_PROJECT_ROOT存在
     if env_root := os.getenv("DEER_FLOW_PROJECT_ROOT"):
+        # 解析对应的项目根路径
         root = Path(env_root).resolve()
+        # 校验路径是否存在以及路径是否是文件夹
         if not root.exists():
             raise ValueError(f"DEER_FLOW_PROJECT_ROOT is set to '{env_root}', but the resolved path '{root}' does not exist.")
         if not root.is_dir():
             raise ValueError(f"DEER_FLOW_PROJECT_ROOT is set to '{env_root}', but the resolved path '{root}' is not a directory.")
         return root
+    # 如果没有设置环境变量，直接返回当前的工作目录
     return Path.cwd().resolve()
 
 
@@ -33,7 +37,9 @@ def resolve_path(value: str | os.PathLike[str], *, base: Path | None = None) -> 
 
 def existing_project_file(names: tuple[str, ...]) -> Path | None:
     """Return the first existing named file under the project root."""
+    # 获取项目根目录
     root = project_root()
+    # 遍历传入的names，拼接到根目录之后，如果对应的路径是文件，直接返回
     for name in names:
         candidate = root / name
         if candidate.is_file():

@@ -153,11 +153,15 @@ async def stream_run(thread_id: str, body: RunCreateRequest, request: Request) -
     resource URL, matching the LangGraph Platform protocol.  The
     ``useStream`` React hook uses this to extract run metadata.
     """
+    # 获取全局的stream bridge用于给客户端传输sse
     bridge = get_stream_bridge(request)
+    # 获取全局的run manager用于定位RunRecord对应的Run
     run_mgr = get_run_manager(request)
+    # 开始一个run，也对应客户端的一次对话请求，对应一个HumanMessage
     record = await start_run(body, thread_id, request)
 
     return StreamingResponse(
+        # 根据RunRecord 从 bridge中找到对应的sse进行消费，并传输给客户端
         sse_consumer(bridge, record, request, run_mgr),
         media_type="text/event-stream",
         headers={

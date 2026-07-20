@@ -110,23 +110,30 @@ class ExtensionsConfig(BaseModel):
         Returns:
             Path to the extensions config file if found, otherwise None.
         """
+        # 如果参数传入了，用参数传入的，如果没有找到对应的路径，报错
         if config_path:
             path = Path(config_path)
             if not path.exists():
                 raise FileNotFoundError(f"Extensions config file specified by param `config_path` not found at {path}")
             return path
+        # 如果环境变量DEER_FLOW_EXTENSIONS_CONFIG_PATH配置了，解析环境变量配置的路径，如果不存在，报错
         elif os.getenv("DEER_FLOW_EXTENSIONS_CONFIG_PATH"):
             path = Path(os.getenv("DEER_FLOW_EXTENSIONS_CONFIG_PATH"))
             if not path.exists():
                 raise FileNotFoundError(f"Extensions config file specified by environment variable `DEER_FLOW_EXTENSIONS_CONFIG_PATH` not found at {path}")
             return path
         else:
+            # 尝试去项目根路径下去找extensions_config.json和mcp_config.json文件
             project_config = existing_project_file(("extensions_config.json", "mcp_config.json"))
+            # 如果存在，直接返回
             if project_config is not None:
                 return project_config
 
+            # 否则找到当前文件所在目录的上5层，即backend包对应的目录
             backend_dir = Path(__file__).resolve().parents[4]
+            # 找到backend的父目录，作为根目录
             repo_root = backend_dir.parent
+            # 在backend和根目录下都去查找extensions_config.json和mcp_config.json文件，如果找到，就返回
             for path in (
                 backend_dir / "extensions_config.json",
                 repo_root / "extensions_config.json",
@@ -151,15 +158,19 @@ class ExtensionsConfig(BaseModel):
         Returns:
             ExtensionsConfig: The loaded config, or empty config if file not found.
         """
+        # 获取对应的文件目录。extensions_config.json或者mcp_config.json
         resolved_path = cls.resolve_config_path(config_path)
+        # 如果目录不存在，创建一个空对象
         if resolved_path is None:
             # Return empty config if extensions config file is not found
             return cls(mcp_servers={}, skills={})
-
+        # 否则读取json文件
         try:
             with open(resolved_path, encoding="utf-8") as f:
                 config_data = json.load(f)
+            # 解析环境变量
             config_data = cls.resolve_env_variables(config_data)
+            # 将其转换为实体对象
             return cls.model_validate(config_data)
         except json.JSONDecodeError as e:
             raise ValueError(f"Extensions config file at {resolved_path} is not valid JSON: {e}") from e

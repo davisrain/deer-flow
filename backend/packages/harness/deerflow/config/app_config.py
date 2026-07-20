@@ -173,24 +173,29 @@ class AppConfig(BaseModel):
         3. Otherwise, search the caller project root.
         4. Finally, search legacy backend/repository-root defaults for monorepo compatibility.
         """
+        # 如果传入了路径，进行解析，路径不存在报错
         if config_path:
             path = Path(config_path)
             if not Path.exists(path):
                 raise FileNotFoundError(f"Config file specified by param `config_path` not found at {path}")
             return path
+        # 从环境变量DEER_FLOW_CONFIG_PATH中获取路径，如果环境变量存在但路径不存在，报错
         elif os.getenv("DEER_FLOW_CONFIG_PATH"):
             path = Path(os.getenv("DEER_FLOW_CONFIG_PATH"))
             if not Path.exists(path):
                 raise FileNotFoundError(f"Config file specified by environment variable `DEER_FLOW_CONFIG_PATH` not found at {path}")
             return path
         else:
+            # 在项目根路径下找config.yaml对应的路径，如果找到了，返回
             project_config = existing_project_file(("config.yaml",))
             if project_config is not None:
                 return project_config
 
+            # 否则尝试从遗留的候选路径中查找，任一存在就返回
             for path in _legacy_config_candidates():
                 if path.exists():
                     return path
+            # 如果最终都没找到，报错
             raise FileNotFoundError("`config.yaml` file not found in the project root or legacy backend/repository root locations")
 
     @classmethod
@@ -206,13 +211,21 @@ class AppConfig(BaseModel):
             AppConfig: The loaded config.
         """
         resolved_path = cls.resolve_config_path(config_path)
+        # 使用yaml读取文件
         with open(resolved_path, encoding="utf-8") as f:
             config_data = yaml.safe_load(f) or {}
 
         # Check config version before processing
         cls._check_config_version(config_data, resolved_path)
 
+        # 解析文件内容中存在的环境变量，即以$为前缀的变量
         config_data = cls.resolve_env_variables(config_data)
+        # 设置默认的database模块，如果配置文件中database模块为空的话
+        # 并且设置默认属性{
+        #     "backend": "sqlite",
+        #     "sqlite_dir": ".deer-flow/data",
+        # }
+        # 指明database的类型和db文件的目录
         cls._apply_database_defaults(config_data)
 
         # Load circuit_breaker config if present
@@ -220,16 +233,23 @@ class AppConfig(BaseModel):
             config_data["circuit_breaker"] = config_data["circuit_breaker"]
 
         # Load extensions config separately (it's in a different file)
+        # 加载extensions_config文件，并解析为ExtensionsConfig对象
         extensions_config = ExtensionsConfig.from_file()
+        # 将ExtensionConfig转换为dict对象放入config_data的extensions中
         config_data["extensions"] = extensions_config.model_dump()
 
+        # 将配置文件内容转换为实体对象
         result = cls.model_validate(config_data)
+        # 如果models没有配置，打印日志
         if not result.models:
             logger.warning(
                 "No models are configured in %s. Add at least one entry under `models:` (see the commented examples in config.example.yaml) or run `make setup`.",
                 resolved_path,
             )
+        # 解析配置文件中的acp_agents模块的配置，将其解析为name: ACPAgentConfig格式的dict
+        # acp = Agent Client Protocol，用于调用外部agent的协议，因此该配置对象配置的是需要调用的外部进程agent的信息，比如调用对应进程的claude code来写代码
         acp_agents = cls._validate_acp_agents(config_data.get("acp_agents", {}))
+        # 将各个配置设置进对应模块的单例中
         cls._apply_singleton_configs(result, acp_agents)
         return result
 
@@ -408,7 +428,9 @@ def _load_and_cache_app_config(config_path: str | None = None) -> AppConfig:
     global _app_config, _app_config_path, _app_config_mtime, _app_config_is_custom
 
     resolved_path = AppConfig.resolve_config_path(config_path)
+    # 解析对应路径的文件为AppConfig对象并让全局对象持有
     _app_config = AppConfig.from_file(str(resolved_path))
+    # 缓存配置文件路径 和 修改时间
     _app_config_path = resolved_path
     _app_config_mtime = _get_config_mtime(resolved_path)
     _app_config_is_custom = False
@@ -425,24 +447,31 @@ def get_app_config() -> AppConfig:
     """
     global _app_config, _app_config_path, _app_config_mtime
 
+    # 尝试从ContextVar中获取appconfig
     runtime_override = _current_app_config.get()
     if runtime_override is not None:
         return runtime_override
 
+    # 如果_app_config存在且是自定义配置的情况，直接返回
     if _app_config is not None and _app_config_is_custom:
         return _app_config
 
+    # 解析配置文件的目录
     resolved_path = AppConfig.resolve_config_path()
+    # 获取配置文件的修改时间
     current_mtime = _get_config_mtime(resolved_path)
 
+    # 如果_app_config不存在 或者 保存的配置文件路径不等于本次解析的 或者 保存的修改时间不等于本次读到的修改时间，那么配置文件都需要重新加载
     should_reload = _app_config is None or _app_config_path != resolved_path or _app_config_mtime != current_mtime
     if should_reload:
+        # 如果路径相等 但是 修改时间不同，说明文件被修改过，打印一条日志
         if _app_config_path == resolved_path and _app_config_mtime is not None and current_mtime is not None and _app_config_mtime != current_mtime:
             logger.info(
                 "Config file has been modified (mtime: %s -> %s), reloading AppConfig",
                 _app_config_mtime,
                 current_mtime,
             )
+        # 加载并缓存配置文件
         _load_and_cache_app_config(str(resolved_path))
     return _app_config
 

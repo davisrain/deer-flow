@@ -308,7 +308,7 @@ async def start_run(
     # 创建RunContext
     run_ctx = get_run_context(request)
 
-    # 客户端中断之后后台应用的操作
+    # 客户端中断之后后台应用的操作，取值为cancel或者continue
     disconnect = DisconnectMode.cancel if body.on_disconnect == "cancel" else DisconnectMode.continue_
 
     body_context = getattr(body, "context", None) or {}
