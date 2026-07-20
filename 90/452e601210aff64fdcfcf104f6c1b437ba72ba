@@ -1,0 +1,22 @@
+backend/packages/harness/deerflow/config/extensions_config.py
+  h_80ca37e46d63b9 113,119,126,128,132,134,136,161,163,167,171,173
+backend/app/gateway/services.py
+  h_80ca37e46d63b9 311
+backend/packages/harness/deerflow/config/runtime_paths.py
+  h_80ca37e46d63b9 9,11,13,19,40,42
+backend/app/gateway/routers/thread_runs.py
+  h_80ca37e46d63b9 156,158,160,164
+backend/packages/harness/deerflow/config/app_config.py
+  h_80ca37e46d63b9 176,182,189,194,198,214,221,223-228,236,238,241,243,249-250,252,431,433,450,455,459,461,464,467,474
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.34-trip",
+  "base_commit_sha": "90452e601210aff64fdcfcf104f6c1b437ba72ba",
+  "prompts": {},
+  "humans": {
+    "h_80ca37e46d63b9": {
+      "author": "zhengyudai <zhengyu_dai@foxmail.com>"
+    }
+  }
+}
