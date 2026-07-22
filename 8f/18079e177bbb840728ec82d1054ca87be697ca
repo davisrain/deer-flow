@@ -1,0 +1,42 @@
+backend/packages/harness/deerflow/runtime/runs/manager.py
+  h_80ca37e46d63b9 121,124,126,438,443,523,525,528,569,581,584,589,598,622,636,643,648
+backend/app/gateway/deps.py
+  h_80ca37e46d63b9 187-188,191,193-194,198,204,215-216,223,225,227-229,233,235,241,315,318,323
+backend/packages/harness/deerflow/persistence/thread_meta/sql.py
+  h_80ca37e46d63b9 60,62,64,66,76,78,83,86
+backend/packages/harness/deerflow/runtime/store/async_provider.py
+  h_80ca37e46d63b9 106,114
+backend/packages/harness/deerflow/persistence/engine.py
+  h_80ca37e46d63b9 99,101,117,121,123,125,140-141,150-153,161,163,187,189,191,193,195
+backend/packages/harness/deerflow/persistence/thread_meta/__init__.py
+  h_80ca37e46d63b9 35
+backend/packages/harness/deerflow/runtime/runs/naming.py
+  h_80ca37e46d63b9 10,17
+backend/packages/harness/deerflow/persistence/run/sql.py
+  h_80ca37e46d63b9 119,121,123,126,130
+backend/packages/harness/deerflow/config/database_config.py
+  h_80ca37e46d63b9 79,86,97
+backend/app/gateway/services.py
+  h_80ca37e46d63b9 156,176-177,179,184,188,230,237,239,253,255,257,265,272-273,275,285,288,293-302,337,339,343,348,360,362,364,367,369,373,389-390,392,397,401,410,418,420
+backend/packages/harness/deerflow/runtime/journal.py
+  h_80ca37e46d63b9 57,63
+backend/packages/harness/deerflow/runtime/runs/worker.py
+  h_80ca37e46d63b9 66,68,72,97,99-100,106,109,114,150,157,169,196,241-242,249,253,255,263,282,298-299,326-327,363,366,369,373,376,381
+backend/packages/harness/deerflow/runtime/checkpointer/async_provider.py
+  h_80ca37e46d63b9 45,47,136,143,150,152,154,194,196,202,204,212
+backend/packages/harness/deerflow/runtime/events/store/__init__.py
+  h_80ca37e46d63b9 7,9,11,14
+backend/packages/harness/deerflow/persistence/run/model.py
+  h_80ca37e46d63b9 49
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.35-trip",
+  "base_commit_sha": "8f18079e177bbb840728ec82d1054ca87be697ca",
+  "prompts": {},
+  "humans": {
+    "h_80ca37e46d63b9": {
+      "author": "zhengyudai <zhengyu_dai@foxmail.com>"
+    }
+  }
+}
