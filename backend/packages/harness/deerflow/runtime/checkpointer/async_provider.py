@@ -42,7 +42,9 @@ def _prepare_sqlite_checkpointer_path(raw: str) -> str:
 
 
 def _prepare_database_sqlite_checkpointer_path(db_config) -> str:
+    # 返回db文件的地址，默认.deer-flow/data/deerflow.db
     conn_str = db_config.checkpointer_sqlite_path
+    # 确保文件目录是存在的
     ensure_sqlite_parent_dir(conn_str)
     return conn_str
 
@@ -131,20 +133,25 @@ async def _async_checkpointer(config) -> AsyncIterator[Checkpointer]:
 @contextlib.asynccontextmanager
 async def _async_checkpointer_from_database(db_config) -> AsyncIterator[Checkpointer]:
     """Async context manager that constructs a checkpointer from unified DatabaseConfig."""
+    # 如果配置的是memory，返回InMemorySaver对象
     if db_config.backend == "memory":
         from langgraph.checkpoint.memory import InMemorySaver
 
         yield InMemorySaver()
         return
 
+    # 如果配置的是sqlite
     if db_config.backend == "sqlite":
         try:
             from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
         except ImportError as exc:
             raise ImportError(SQLITE_INSTALL) from exc
 
+        # 开启线程 准备sqlite checkpointer的目录
         conn_str = await asyncio.to_thread(_prepare_database_sqlite_checkpointer_path, db_config)
+        # 连接db，返回AsyncSqliteSaver。实际就是创建了一个sqlite的数据库连接，然后saver对象持有该连接
         async with AsyncSqliteSaver.from_conn_string(conn_str) as saver:
+            # setup的时候会通过数据库连接创建checkpoint 和 writes这两张表
             await saver.setup()
             yield saver
         return
@@ -184,13 +191,17 @@ async def make_checkpointer(app_config: AppConfig | None = None) -> AsyncIterato
         app_config = get_app_config()
 
     # Legacy: standalone checkpointer config takes precedence
+    # 如果配置文件里面配置checkpointer模块(配置文件中checkpointer模块已经被标记为过时，后续都使用database模块)
     if app_config.checkpointer is not None:
+        # 根据配置文件内容创建对应的saver
         async with _async_checkpointer(app_config.checkpointer) as saver:
             yield saver
             return
 
     # Unified database config
+    # 查看配置文件配置的database模块
     db_config = getattr(app_config, "database", None)
+    # 如果不是memory，尝试使用db创建checkpointer的saver
     if db_config is not None and db_config.backend != "memory":
         async with _async_checkpointer_from_database(db_config) as saver:
             yield saver
@@ -198,5 +209,5 @@ async def make_checkpointer(app_config: AppConfig | None = None) -> AsyncIterato
 
     # Default: in-memory
     from langgraph.checkpoint.memory import InMemorySaver
-
+    # 默认使用内存级别的InMemorySaver
     yield InMemorySaver()

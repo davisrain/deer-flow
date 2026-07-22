@@ -184,17 +184,24 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
 
         # Initialize persistence engine BEFORE checkpointer so that
         # auto-create-database logic runs first (postgres backend).
+        # 根据配置文件中的database模块 初始化持久化引擎（会自动创建表结构）
+        # 初始化完成之后engine和session_factory会被放到persistence/engine.py里面的全局变量中
         await init_engine_from_config(config.database)
 
+        # 根据配置文件创建checkpointer
         app.state.checkpointer = await stack.enter_async_context(make_checkpointer(config))
+        # 创建checkpointer对应的store对象
+        # 配置文件中，默认是没有配置checkpointer模块的，因此默认使用的是InMemoryStore，内存存储器
         app.state.store = await stack.enter_async_context(make_store(config))
 
         # Initialize repositories — one get_session_factory() call for all.
+        # 获取前面初始化 数据库引擎的时候 创建的session_factory
         sf = get_session_factory()
         if sf is not None:
             from deerflow.persistence.feedback import FeedbackRepository
             from deerflow.persistence.run import RunRepository
 
+            # 创建保存RunRecord的RunRepository
             app.state.run_store = RunRepository(sf)
             app.state.feedback_repo = FeedbackRepository(sf)
         else:
@@ -205,23 +212,33 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
 
         from deerflow.persistence.thread_meta import make_thread_store
 
+        # 使用session_factory或者checkpointer的store对象，创建保存thread信息的store对象
+        # 优先使用session_factory
         app.state.thread_store = make_thread_store(sf, app.state.store)
 
         # Run event store. The store and the matching ``run_events_config`` are
         # both frozen at startup so ``get_run_context`` does not combine a
         # freshly-reloaded ``AppConfig.run_events`` with a store still bound to
         # the previous backend.
+        # 获取配置文件中的run_events模块的内容
         run_events_config = getattr(config, "run_events", None)
+        # 将run_events_config放进app.store中，这样这个配置不会热更新
         app.state.run_events_config = run_events_config
+        # 根据配置决定使用的对象
+        # 如果配置为memory，使用MemoryRunEventStore（默认配置）
+        # 配置为db，使用DbRunEventStore
         app.state.run_event_store = make_run_event_store(run_events_config)
 
         # RunManager with store backing for persistence
+        # 创建一个RunManager放入app的store中，其中RunManger复用run_store
         app.state.run_manager = RunManager(store=app.state.run_store)
+        # 如果backend数据库配置的是sqlite的情况
         if getattr(config.database, "backend", None) == "sqlite":
             from deerflow.utils.time import now_iso
 
             # Startup-only recovery: clean shutdowns return no active rows and
             # the thread-status update below becomes a no-op.
+            # 只在每次启动的时候执行，将一些还在运行状态的run记录更新为终态
             recovered_runs = await app.state.run_manager.reconcile_orphaned_inflight_runs(
                 error="Gateway restarted before this run reached a durable final state.",
                 before=now_iso(),
@@ -295,12 +312,15 @@ def get_run_context(request: Request) -> RunContext:
         # 保存/恢复对话状态（多轮记忆）
         checkpointer=get_checkpointer(request),
         # 跨线程共享数据（用户记忆等）
+        # 默认使用InMemoryStore，内存层面
         store=get_store(request),
         # 记录运行过程事件（token/消息/工具调用）
+        # 默认使用MemoryRunEventStore，内存层面
         event_store=get_run_event_store(request),
         # event_store 的配置开关，启动时冻结
         run_events_config=getattr(request.app.state, "run_events_config", None),
         # thread 元数据（标题、状态、归属）
+        # 默认使用ThreadMetaRepository，db层面
         thread_store=get_thread_store(request),
         # 当前 config.yaml 配置，每次请求热读
         app_config=get_config(),

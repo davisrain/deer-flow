@@ -96,8 +96,9 @@ async def init_engine(
         import os
 
         from sqlalchemy import event
-
+        # 创建对应的sqlite db目录
         os.makedirs(sqlite_dir or ".", exist_ok=True)
+        # sqlalchemy python的orm框架，这里应该是在根据数据库url创建对应的数据库引擎
         _engine = create_async_engine(url, echo=echo, json_serializer=_json_serializer)
 
         # Enable WAL on every new connection. SQLite PRAGMA settings are
@@ -113,11 +114,15 @@ async def init_engine(
         # SQLAlchemy's aiosqlite dialect inherit that default.  Setting
         # it again would be a no-op.
         @event.listens_for(_engine.sync_engine, "connect")
+        # 每次创建连接的时候执行一些语句
         def _enable_sqlite_wal(dbapi_conn, _record):  # noqa: ARG001 — SQLAlchemy contract
             cursor = dbapi_conn.cursor()
             try:
+                # write after log，先写日志再写db
                 cursor.execute("PRAGMA journal_mode=WAL;")
+                # 日志的fsync的模式
                 cursor.execute("PRAGMA synchronous=NORMAL;")
+                # 外键约束关掉
                 cursor.execute("PRAGMA foreign_keys=ON;")
             finally:
                 cursor.close()
@@ -132,6 +137,8 @@ async def init_engine(
     else:
         raise ValueError(f"Unknown persistence backend: {backend!r}")
 
+    # 创建session工厂，后续每次数据库操作都从这里拿session
+    # session相当于是ORM层的，使用业务实体进行db操作
     _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
 
     # Auto-create tables (dev convenience). Production should use Alembic.
@@ -140,6 +147,10 @@ async def init_engine(
     # Import all models so Base.metadata discovers them.
     # When no models exist yet (scaffolding phase), this is a no-op.
     try:
+        # 这里导入所有的models对象，Base.metadata就会发现它们，并将它们注册为元数据，为下面create_all创建表做准备
+        # (继承了Base的类，类定义的时候就会执行注册操作。因为导入类声明的时候，相当于就是创建对应的类对象。
+        # 创建类对象就等于执行了metaclass(classname, 父类元组, namespace)，
+        # 通常情况下metaclass就是type，type的__new__方法里面会去调用父类的__init_subclass__方法，我猜测注册操作就是在Base类的这个方法中实现的)
         import deerflow.persistence.models  # noqa: F401
     except ImportError:
         # Models package not yet available — tables won't be auto-created.
@@ -147,7 +158,9 @@ async def init_engine(
         logger.debug("deerflow.persistence.models not found; skipping auto-create tables")
 
     try:
+        # begin获取的Connection是Core层的，能直接执行sql，和session有区别
         async with _engine.begin() as conn:
+            # 创建所有的表 create table if not exist
             await conn.run_sync(Base.metadata.create_all)
     except Exception as exc:
         if backend == "postgres" and "does not exist" in str(exc):
@@ -171,10 +184,15 @@ async def init_engine_from_config(config) -> None:
         await init_engine("memory")
         return
     await init_engine(
+        # 配置的database类型，取值是sqlite或者postgres
         backend=config.backend,
+        # 配置中对应的db的url
         url=config.app_sqlalchemy_url,
+        # 是否要打印所有的sql日志
         echo=config.echo_sql,
+        # 数据库连接池的数量，默认5
         pool_size=config.pool_size,
+        # 如果是sqlite类型的db，获取其数据目录保存的地方
         sqlite_dir=config.sqlite_dir if config.backend == "sqlite" else "",
     )
 

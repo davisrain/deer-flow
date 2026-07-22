@@ -54,11 +54,13 @@ class RunJournal(BaseCallbackHandler):
         self.thread_id = thread_id
         self._store = event_store
         self._track_tokens = track_token_usage
+        # buffer里面保存的数量阈值，达到阈值后会刷入event_store
         self._flush_threshold = flush_threshold
         self._progress_reporter = progress_reporter
         self._progress_flush_interval = progress_flush_interval
 
         # Write buffer
+        # 用于保存run_event的列表，当达到阈值之后，刷入到event_store中
         self._buffer: list[dict] = []
         self._pending_flush_tasks: set[asyncio.Task[None]] = set()
         self._pending_progress_task: asyncio.Task[None] | None = None

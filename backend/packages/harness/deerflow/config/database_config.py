@@ -76,12 +76,14 @@ class DatabaseConfig(BaseModel):
     @property
     def sqlite_path(self) -> str:
         """Unified SQLite file path shared by checkpointer and app."""
+        # 在sqlite对应的目录后添加一个deerflow.db作为sqlitedb的文件地址
         return os.path.join(self._resolved_sqlite_dir, "deerflow.db")
 
     # Backward-compatible aliases
     @property
     def checkpointer_sqlite_path(self) -> str:
         """SQLite file path for the LangGraph checkpointer (alias for sqlite_path)."""
+        # 返回sqlite_path的值，也就是.deer-flow/data/deerflow.db
         return self.sqlite_path
 
     @property
@@ -92,6 +94,7 @@ class DatabaseConfig(BaseModel):
     @property
     def app_sqlalchemy_url(self) -> str:
         """SQLAlchemy async URL for the application ORM engine."""
+        # 如果是sqlite，拼接出sqlite的url地址
         if self.backend == "sqlite":
             return f"sqlite+aiosqlite:///{self.sqlite_path}"
         if self.backend == "postgres":

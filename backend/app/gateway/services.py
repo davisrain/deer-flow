@@ -153,7 +153,7 @@ def merge_run_context_overrides(config: dict[str, Any], context: Mapping[str, An
         return
     configurable = config.setdefault("configurable", {})
     runtime_context = config.setdefault("context", {})
-    # 将白名单中的属性依次放入configurable和context中
+    # 将白名单中的属性依次放入configurable和context属性中，白名单中的属性都是和agent相关的
     for key in _CONTEXT_CONFIGURABLE_KEYS:
         if key in context:
             if isinstance(configurable, dict):
@@ -173,14 +173,19 @@ def inject_authenticated_user_context(config: dict[str, Any], request: Request) 
     The value comes from server-side auth state, never from client context.
     """
 
+    # 获取当前请求state里面的user属性
+    # user是在AuthMiddleware里面添加进request.state中的
     user = getattr(request.state, "user", None)
+    # 拿到user_id属性
     user_id = getattr(user, "id", None)
     if user_id is None:
         return
 
+    # 判断user的系统角色，如果是internal，直接返回
     if getattr(user, "system_role", None) == INTERNAL_SYSTEM_ROLE:
         return
 
+    # 否则将user_id放入到context中
     runtime_context = config.setdefault("context", {})
     if isinstance(runtime_context, dict):
         runtime_context["user_id"] = str(user_id)
@@ -222,14 +227,16 @@ def build_run_config(
     identically.
     """
     config: dict[str, Any] = {"recursion_limit": 100}
+    # 如果请求体中传入的config存在的话
     if request_config:
         # LangGraph >= 0.6.0 introduced ``context`` as the preferred way to
         # pass thread-level data and rejects requests that include both
         # ``configurable`` and ``context``.  If the caller already sends
         # ``context``, honour it and skip our own ``configurable`` dict.
 
-        # 如果context和configurable都存在，优先用context的内容
+        # 如果请求体中的config里存在context元素
         if "context" in request_config:
+            # 如果请求体的config中也存在configurable元素，打印日志
             if "configurable" in request_config:
                 logger.warning(
                     "build_run_config: client sent both 'context' and 'configurable'; preferring 'context' (LangGraph >= 0.6.0). thread_id=%s, caller_configurable keys=%s",
@@ -243,10 +250,11 @@ def build_run_config(
                 context = dict(context_value)
             else:
                 raise ValueError("request config 'context' must be a mapping or null.")
+            # 将请求体带入的context放到要返回的config对象中
             config["context"] = context
-        # 如果context不存在
+        # 如果请求体的config中不存在context元素
         else:
-            # 在config中设置configurable
+            # 将请求体中config中的configurable对象的元素放入 config对象中
             configurable = {"thread_id": thread_id}
             configurable.update(request_config.get("configurable", {}))
             config["configurable"] = configurable
@@ -254,14 +262,17 @@ def build_run_config(
         for k, v in request_config.items():
             if k not in ("configurable", "context"):
                 config[k] = v
-    # 如果request_config不存在，直接在config中添加{configurable: {thread_id: xx}}
+    # 如果请求体中都不存在config这个属性，那么直接在要返回的config中添加{configurable: {thread_id: xx}}
     else:
         config["configurable"] = {"thread_id": thread_id}
 
     # Inject custom agent name when the caller specified a non-default assistant.
     # Honour an explicit agent_name in the active runtime options container.
     # 添加自定义的agent名称到config中
+
+    # 如果传入了agent_name且agent_name不等于lead_agent
     if assistant_id and assistant_id != _DEFAULT_ASSISTANT_ID:
+        # 规范化agent的名称
         normalized = assistant_id.strip().lower().replace("_", "-")
         if not normalized or not re.fullmatch(r"[a-z0-9-]+", normalized):
             raise ValueError(f"Invalid assistant_id {assistant_id!r}: must contain only letters, digits, and hyphens after normalization.")
@@ -271,12 +282,24 @@ def build_run_config(
             target = config["context"]
         else:
             target = config.setdefault("configurable", {})
+        # 如果agent_name这个属性不在对应的context或者configurable中，维护进去
         if target is not None and "agent_name" not in target:
             target["agent_name"] = normalized
+        # 然后在context或者configurable的外层config中设置run_name属性，value就等于规范化之后的agent_name
         config.setdefault("run_name", resolve_root_run_name(config, normalized))
     # 在config中添加metadata
     if metadata:
         config.setdefault("metadata", {}).update(metadata)
+
+    # 最终config里面的内容是：
+    # {
+    #   "recursion_limit": 100,
+    #   "context/configurable": {body.config.context/configurable},
+    #   "metadata": {body.metadata},
+    #   ...
+    #   other_attribute: body.config.other_attribute
+    # }
+    # 也就是langgraph运行所需要的RunnableConfig
     return config
 
 
@@ -311,14 +334,18 @@ async def start_run(
     # 客户端中断之后后台应用的操作，取值为cancel或者continue
     disconnect = DisconnectMode.cancel if body.on_disconnect == "cancel" else DisconnectMode.continue_
 
+    # 获取请求体传入的context对象
     body_context = getattr(body, "context", None) or {}
+    # 获取context中指定的llm名称
     model_name = body_context.get("model_name")
 
     # Coerce non-string model_name values to str before truncation.
+    # 如果模型名称存在且不是str类型的话，将其转换为str类型
     if model_name is not None and not isinstance(model_name, str):
         model_name = str(model_name)
 
     # Validate model against the allowlist when a model_name is provided.
+    # 如果模型名称存在，尝试从config.yaml配置中获取对应的模型配置
     if model_name:
         app_config = get_app_config()
         # 获取模型配置，没有获取到抛出异常
@@ -330,14 +357,20 @@ async def start_run(
             )
 
     try:
+        # 创建出一个RunRecord，表示本次对话
         record = await run_mgr.create_or_reject(
+            # 当前的会话id
             thread_id,
+            # 应该是前端传入的agent id
             body.assistant_id,
             on_disconnect=disconnect,
+            # 请求体中的metadata
             metadata=body.metadata or {},
+            # 请求体中的messages信息和配置信息
             kwargs={"input": body.input, "config": body.config},
             # 当一个thread_id运行多个run时，后运行的那个run的执行策略
             multitask_strategy=body.multitask_strategy,
+            # 模型名称，可能为None
             model_name=model_name,
         )
     except ConflictError as exc:
@@ -353,14 +386,19 @@ async def start_run(
         # thread_store	thread 的外壳：标题、状态、归属用户
         # run_store	每次 run 的执行记录：状态、token 用量、耗时
         # checkpointer	thread 的对话内容：完整的 LangGraph 状态快照，是多轮记忆的来源
+
+        # 默认的thread_store，是使用sqlite的ThreadMetaRepository
         existing = await run_ctx.thread_store.get(thread_id)
+        # 如果thread_id没有查询到对应的数据，创建一个新的thread并写入db
         if existing is None:
             await run_ctx.thread_store.create(
                 thread_id,
                 assistant_id=body.assistant_id,
+                # 传入请求体中的metadata
                 metadata=body.metadata,
             )
         else:
+            # 如果存在对应的thread，将状态更新为running
             await run_ctx.thread_store.update_status(thread_id, "running")
     except Exception:
         logger.warning("Failed to upsert thread_meta for %s (non-fatal)", sanitize_log_param(thread_id))
@@ -369,7 +407,7 @@ async def start_run(
     agent_factory = resolve_agent_factory(body.assistant_id)
     # 将input中的messages规范化，转换为BaseMessage的子类
     graph_input = normalize_input(body.input)
-    # 构建langgraph运行时的RunnableConfig，有context的时候，优先使用context，其次使用configurable
+    # 构建langgraph运行时的RunnableConfig，请求体的config里 有context的时候，优先使用context，其次使用configurable
     config = build_run_config(thread_id, body.config, body.metadata, assistant_id=body.assistant_id)
 
     # Merge DeerFlow-specific context overrides into both ``configurable`` and ``context``.
@@ -377,7 +415,9 @@ async def start_run(
     # that carries agent configuration (model_name, thinking_enabled, etc.).
     # Only agent-relevant keys are forwarded; unknown keys (e.g. thread_id) are ignored.
     # 将body中的context的内容添加进RunnableConfig中
+    # 上面一步构建RunnableConfig的时候用的是body.config.context，这里用的是body.context，是两个维度的东西
     merge_run_context_overrides(config, getattr(body, "context", None))
+    # 将user_id设置进RunnableConfig的context中
     inject_authenticated_user_context(config, request)
 
     # 将stream mode规范化为list

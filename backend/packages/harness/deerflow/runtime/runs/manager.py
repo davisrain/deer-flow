@@ -118,9 +118,12 @@ class RunManager:
         *,
         persistence_retry_policy: PersistenceRetryPolicy | None = None,
     ) -> None:
+        # key是run_id，value是对应的RunRecord
         self._runs: dict[str, RunRecord] = {}
         self._lock = asyncio.Lock()
+        # 在deps.py中初始化，传入的是RunRepository对象
         self._store = store
+        # 持久化失败的重试策略
         self._persistence_retry_policy = persistence_retry_policy or PersistenceRetryPolicy()
 
     @staticmethod
@@ -432,10 +435,12 @@ class RunManager:
             if record is None:
                 logger.warning("set_status called for unknown run %s", run_id)
                 return
+            # 设置record的状态和更新时间
             record.status = status
             record.updated_at = _now_iso()
             if error is not None:
                 record.error = error
+        # 装状态变更写入db
         await self._persist_status(record, status, error=error)
         logger.info("Run %s -> %s", run_id, status.value)
 
@@ -515,9 +520,12 @@ class RunManager:
         This method holds the lock across both the check and the insert,
         eliminating the TOCTOU race in separate ``has_inflight`` + ``create``.
         """
+        # 生成一个随机的run_id
         run_id = str(uuid.uuid4())
+        # 获取当前时间
         now = _now_iso()
 
+        # 支持的策略有 拒绝、中断、回滚，指的是当前存在正在运行的run，那么后进来的run请求的执行策略
         _supported_strategies = ("reject", "interrupt", "rollback")
         interrupted_records: list[RunRecord] = []
 
@@ -558,7 +566,7 @@ class RunManager:
             self._runs[run_id] = record
             persisted = False
             try:
-                # 将新的RunRecord持久化
+                # 将新的RunRecord写入db
                 await self._persist_new_run_to_store(record)
                 persisted = True
             except Exception:
@@ -570,14 +578,15 @@ class RunManager:
                 if not persisted:
                     self._runs.pop(run_id, None)
 
-            # 遍历那些正在跑的run
+            # 遍历那些正在跑的run，将它们取消掉
             if multitask_strategy in ("interrupt", "rollback") and inflight:
                 for r in inflight:
+                    # 设置要执行的策略，是中断还是回滚
                     r.abort_action = multitask_strategy
                     # 这里设置信号旗，在worker.py中遍历处理stream的chunk的时候会读这个标志位，识别已经被中断
                     # 然后根据abort_action决定是回滚还是直接中断
                     r.abort_event.set()
-                    # 如果RunRecord存在task了，就是跑agent loop的任务，调用cancel取消掉
+                    # 如果RunRecord存在task了，就是正在跑agent loop的任务，调用cancel取消掉
                     if r.task is not None and not r.task.done():
                         r.task.cancel()
                     # 将状态设置为 被中断
@@ -586,7 +595,7 @@ class RunManager:
                     # 收集这些被中断的RunRecord
                     interrupted_records.append(r)
 
-        # 遍历这些被中断的RunRecord，持久化更新它们的状态
+        # 遍历这些被中断的RunRecord，将最新的状态写入db
         for interrupted_record in interrupted_records:
             await self._persist_status(interrupted_record, RunStatus.interrupted)
         logger.info("Run created: run_id=%s thread_id=%s", run_id, thread_id)
@@ -610,6 +619,7 @@ class RunManager:
         if self._store is None:
             return []
         try:
+            # 尝试查询状态是pending和running的RunRecord记录
             rows = await self._call_store_with_retry(
                 "list_inflight",
                 "*",
@@ -623,16 +633,19 @@ class RunManager:
         now = _now_iso()
         for row in rows:
             try:
+                # 将dict对象转换为业务实体
                 record = self._record_from_store(row)
             except Exception:
                 logger.warning("Failed to map orphaned run row during reconciliation", exc_info=True)
                 continue
 
             async with self._lock:
+                # 尝试在内存中查找是否存在该RunRecord，如果还存在，说明是有任务在执行的，跳过
                 live_record = self._runs.get(record.run_id)
                 if live_record is not None and live_record.status in (RunStatus.pending, RunStatus.running):
                     continue
 
+            # 如果没有对应的执行任务了，将这些pending和running状态的RunRecord更新为error状态
             record.status = RunStatus.error
             record.error = error
             record.updated_at = now

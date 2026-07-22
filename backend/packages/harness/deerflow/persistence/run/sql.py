@@ -116,13 +116,18 @@ class RunRepository(RunStore):
             "follow_up_to_run_id": follow_up_to_run_id,
             "updated_at": now,
         }
+        # 创建出一个session
         async with self._sf() as session:
+            # 先尝试从数据库查询对应的run_id是否存在RunRecord
             row = await session.get(RunRow, run_id)
+            # 如果不存在，插入
             if row is None:
                 session.add(RunRow(run_id=run_id, created_at=created, **values))
+            # 如果存在，更新
             else:
                 for key, value in values.items():
                     setattr(row, key, value)
+            # 这里应该是提交事务
             await session.commit()
 
     async def get(

@@ -57,9 +57,13 @@ class ThreadMetaRepository(ThreadMetaStore):
             updated_at=now,
         )
         async with self._sf() as session:
+            # 插入thread数据到db
             session.add(row)
+            # 提交事务
             await session.commit()
+            # 从db中刷新最新的thread状态
             await session.refresh(row)
+            # 将thread转换为dict对象返回
             return self._row_to_dict(row)
 
     async def get(
@@ -69,13 +73,17 @@ class ThreadMetaRepository(ThreadMetaStore):
         user_id: str | None | _AutoSentinel = AUTO,
     ) -> dict | None:
         resolved_user_id = resolve_user_id(user_id, method_name="ThreadMetaRepository.get")
+        # 开启一个session
         async with self._sf() as session:
+            # 根据thread_id查询db
             row = await session.get(ThreadMetaRow, thread_id)
             if row is None:
                 return None
             # Enforce owner filter unless explicitly bypassed (user_id=None).
+            # 如果查询出来的thread上的user_id和当前的user_id不一致，返回None
             if resolved_user_id is not None and row.user_id != resolved_user_id:
                 return None
+            # 转换成dict对象返回
             return self._row_to_dict(row)
 
     async def check_access(self, thread_id: str, user_id: str, *, require_existing: bool = False) -> bool:

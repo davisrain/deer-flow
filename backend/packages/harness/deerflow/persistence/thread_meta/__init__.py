@@ -32,6 +32,7 @@ def make_thread_store(
     Returns a SQL-backed repository when a session factory is available,
     otherwise falls back to the in-memory LangGraph Store implementation.
     """
+    # 使用session_factory创建出一个ThreadMetaRepository，用于操作thread表相关的数据库读写操作
     if session_factory is not None:
         return ThreadMetaRepository(session_factory)
     if store is None:

@@ -103,6 +103,7 @@ async def make_store(app_config: AppConfig | None = None) -> AsyncIterator[BaseS
     if app_config is None:
         app_config = get_app_config()
 
+    # 如果配置文件里面没有配置checkpointer，那么使用内存存储，返回InMemoryStore
     if app_config.checkpointer is None:
         from langgraph.store.memory import InMemoryStore
 
@@ -110,5 +111,6 @@ async def make_store(app_config: AppConfig | None = None) -> AsyncIterator[BaseS
         yield InMemoryStore()
         return
 
+    # 如果配置了checkpointer，使用checkpointer的配置来初始化store
     async with _async_store(app_config.checkpointer) as store:
         yield store

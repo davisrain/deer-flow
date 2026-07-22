@@ -63,10 +63,13 @@ def _build_runtime_context(
     under ``config['configurable']['__pregel_runtime']`` — see
     ``langgraph.pregel.main`` where ``parent_runtime.merge(...)`` is invoked.
     """
+    # 首先放入thread_id和run_id
     runtime_ctx: dict[str, Any] = {"thread_id": thread_id, "run_id": run_id}
+    # 如果传入的context是dict话，将里面的k,v都放入runtime_ctx中
     if isinstance(caller_context, dict):
         for key, value in caller_context.items():
             runtime_ctx.setdefault(key, value)
+    # 并且把配置文件构建的app_config也存入
     if app_config is not None:
         runtime_ctx["app_config"] = app_config
     return runtime_ctx
@@ -91,18 +94,24 @@ class RunContext:
 
 def _install_runtime_context(config: dict, runtime_context: dict[str, Any]) -> None:
     existing_context = config.get("context")
+    # 先判断当前的config中是否存在context
     if isinstance(existing_context, dict):
+        # 如果存在的话，将context可能没有的thread_id，run_id，app_config写入
+        # 因为context如果存在，说明context里面的内容已经在_build_runtime_context的时候就全部放入runtime_context中了
         existing_context.setdefault("thread_id", runtime_context["thread_id"])
         existing_context.setdefault("run_id", runtime_context["run_id"])
         if "app_config" in runtime_context:
             existing_context["app_config"] = runtime_context["app_config"]
         return
-
+    # 如果不存在，直接将整个runtime_context当作context存入
     config["context"] = dict(runtime_context)
+
+    # 这个方法实际的作用也就等于将thread_id，run_id，app_config写入config的context中
 
 
 def _compute_agent_factory_supports_app_config(agent_factory: Any) -> bool:
     try:
+        # 判断对应的工厂函数的参数里面是否有app_config
         return "app_config" in inspect.signature(agent_factory).parameters
     except (TypeError, ValueError):
         return False
@@ -138,12 +147,14 @@ async def run_agent(
     """Execute an agent in the background, publishing events to *bridge*."""
 
     # Unpack infrastructure dependencies from RunContext.
+    # 将RunContext里面持有的属性都拿出来
     checkpointer = ctx.checkpointer
     store = ctx.store
     event_store = ctx.event_store
     run_events_config = ctx.run_events_config
     thread_store = ctx.thread_store
 
+    # 拿出RunRecord中的run_id和thread_id
     run_id = record.run_id
     thread_id = record.thread_id
     requested_modes: set[str] = set(stream_modes or ["values"])
@@ -155,6 +166,7 @@ async def run_agent(
     journal = None
 
     # Track whether "events" was requested but skipped
+    # 查看stream_modes里面是否存在events这个模式，如果存在，打印日志提示不支持
     if "events" in requested_modes:
         logger.info(
             "Run %s: 'events' stream_mode not supported in gateway (requires astream_events + checkpoint callbacks). Skipping.",
@@ -181,6 +193,7 @@ async def run_agent(
             )
 
         # 1. Mark running
+        # 将RunRecord的状态更新为running，并持久化
         await run_manager.set_status(run_id, RunStatus.running)
 
         # Snapshot the latest pre-run checkpoint so rollback can restore it.
@@ -225,19 +238,21 @@ async def run_agent(
         # manually here because we drive the graph through ``agent.astream(config=...)``
         # without passing the official ``context=`` parameter.
 
-        # 构建agent loop使用过的runtime_ctx， 从config的context中获取
+        # 构建agent loop使用的runtime_ctx
+        # 持有thread_id, run_id, config中的context(大部分来自于请求体中的context)，以及app_config
         runtime_ctx = _build_runtime_context(thread_id, run_id, config.get("context"), ctx.app_config)
 
         # Expose the run-scoped journal under a sentinel key so middleware can
         # write audit events (e.g. SafetyFinishReasonMiddleware recording
         # suppressed tool calls). Double-underscore prefix marks it as a
         # runtime-internal channel; user code must not depend on the key name.
+        # todo 确认下这里在干嘛
         if journal is not None:
             runtime_ctx["__run_journal"] = journal
 
-        # 再将config中的context替换成runtime_ctx
+        # 这个方法实际的作用是将thread_id，run_id，app_config写入config的context中
         _install_runtime_context(config, runtime_ctx)
-        # 将runtime_ctx构建成Runtime对象
+        # 将runtime_ctx和store一起构建成Runtime对象
         runtime = Runtime(context=cast(Any, runtime_ctx), store=store)
         # 设置进config的configurable中，langgraph会自动将其转换成运行时的context
         config.setdefault("configurable", {})["__pregel_runtime"] = runtime
@@ -245,7 +260,7 @@ async def run_agent(
         # Inject RunJournal as a LangChain callback handler.
         # on_llm_end captures token usage; on_chain_start/end captures lifecycle.
 
-        # 将RunJournal注册为langchain的callback handler，用于获取token使用量
+        # 将RunJournal注册为langchain的callback handler，用于获取token使用量，存储run_events等信息
         if journal is not None:
             config.setdefault("callbacks", []).append(journal)
 
@@ -264,6 +279,7 @@ async def run_agent(
 
         # Resolve after runtime context installation so context/configurable reflect
         # the agent name that this run will actually execute.
+        # 向config里面设置run_name属性，默认为lead_agent
         config.setdefault("run_name", resolve_root_run_name(config, record.assistant_id))
 
         # 最终构建好要传入agent loop的RunnableConfig
@@ -279,8 +295,8 @@ async def run_agent(
         #         "thinking_enabled": True,            # body.context → merge_run_context_overrides
         #         "is_plan_mode": False,               # body.context → merge_run_context_overrides
         #         "subagent_enabled": True,            # body.context → merge_run_context_overrides
-        #         "agent_name": "my-agent",            # body.assistant_id / body.context
-        #         "__pregel_runtime": <Runtime对象>,   # _install_runtime_context（LangGraph内部用）
+        #         "agent_name": "my-agent",            # body.assistant_id → build_run_config or merge_run_context_overrides
+        #         "__pregel_runtime": <Runtime对象>,    # work.py
         #     },
         #
         #     # ── 来自 _install_runtime_context / body.context ──
@@ -307,7 +323,8 @@ async def run_agent(
         # })
         runnable_config = RunnableConfig(**config)
 
-        # 调用agent_factory生成agent
+        # 调用agent_factory生成agent，传入构建好的RunnableConfig
+        # 即make_lead_agent函数
         if ctx.app_config is not None and _agent_factory_supports_app_config(agent_factory):
             agent = agent_factory(config=runnable_config, app_config=ctx.app_config)
         else:
@@ -343,19 +360,25 @@ async def run_agent(
         # 6. Build LangGraph stream_mode list
         #    "events" is NOT a valid astream mode — skip it
         #    "messages-tuple" maps to LangGraph's "messages" mode
+        # 构建langgraph使用的stream_modes
         lg_modes: list[str] = []
         for m in requested_modes:
+            # 如果是messages-tuple，映射为messages
             if m == "messages-tuple":
                 lg_modes.append("messages")
+            # events不支持，跳过
             elif m == "events":
                 # Skipped — see log above
                 continue
+            # 其他合法的modes，直接添加进去
             elif m in _VALID_LG_MODES:
                 lg_modes.append(m)
+        # 如果上一步完成后仍是空集合，默认使用values
         if not lg_modes:
             lg_modes = ["values"]
 
         # Deduplicate while preserving order
+        # 对lg_modes去重
         seen: set[str] = set()
         deduped: list[str] = []
         for m in lg_modes:
