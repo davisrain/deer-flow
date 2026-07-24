@@ -388,8 +388,61 @@ async def run_agent(
         lg_modes = deduped
 
         logger.info("Run %s: streaming with modes %s (requested: %s)", run_id, lg_modes, requested_modes)
+        # 在这里说明下不同mode下，graph返回的chunk的区别
+        # values：是在每次pregel的superstep后返回的，对应就是整个AgentState的快照
+
+        # updates：是在每个节点执行完成之后就emit，不会等到superstep执行完成，chunk里面的key是节点名，value是本次节点执行完成要更新的AgentState中的内容
+
+        # messages: 在llm每生成一个token的时候都emit，结构是一个二元组（AIMessageChunk, metadata）
+        # # 源码：_messages.py _emit()
+        # (
+        #     AIMessageChunk(content="你好", id="run-xxx"),  # LangChain 消息对象
+        #     {
+        #         "langgraph_step": 1,
+        #         "langgraph_node": "chatbot",
+        #         "langgraph_triggers": ["start"],
+        #         "langgraph_checkpoint_ns": "chatbot:task-id",
+        #         "ls_model_name": "gpt-4o",
+        #         # ...其他 LangChain 元数据
+        #     }
+        # )
+
+        # tasks：任务开始和任务结束时各emit一次，每执行一个节点都被抽象为一个task
+        # # 任务开始时（源码：debug.py map_debug_tasks()）
+        # {
+        #     "id": "abc123",           # task_id
+        #     "name": "chatbot",        # 节点名
+        #     "input": {...},           # 节点输入
+        #     "triggers": ["messages"], # 触发该任务的 channel 名
+        #     "metadata": {...}         # 可选，用户元数据
+        # }
+        #
+        # # 任务结束时（源码：debug.py map_debug_task_results()）
+        # {
+        #     "id": "abc123",
+        #     "name": "chatbot",
+        #     "error": None,            # 或异常信息字符串
+        #     "result": {               # 节点写的内容（只含 stream_keys 里的 channel）
+        #         "messages": [...]
+        #     },
+        #     "interrupts": []          # 若触发了 interrupt，这里有 Interrupt 对象序列化结果
+        # }
+
+        # checkpoints：每次checkpoint保存的时候emit，内容等同于get_state()方法
+
+        # debug：tasks和checkpoints的包装版，也就是在外面套了一层
+        # # tasks 事件包装成：
+        # {
+        #     "step": 1,
+        #     "timestamp": "2026-07-23T10:00:00+00:00",
+        #     "type": "task/checkpoint", # 或 "task_result"
+        #     "payload": { ... }         # 同 tasks/checkpoint 模式的内容
+        # }
+
+        # custom：节点内部主动调用StreamWriter时emit，可以是任意结构
 
         # 7. Stream using graph.astream
+        # 如果stream_mode只有一个，且不存在stream子graph
         if len(lg_modes) == 1 and not stream_subgraphs:
             # Single mode, no subgraphs: astream yields raw chunks
             single_mode = lg_modes[0]
@@ -398,10 +451,15 @@ async def run_agent(
                 if record.abort_event.is_set():
                     logger.info("Run %s abort requested — stopping", run_id)
                     break
+                # 尝试从chunk中提出llm的错误降级信息
                 llm_error_fallback_message = llm_error_fallback_message or _extract_llm_error_fallback_message(chunk)
+                # 将langgraph的stream_mode替换成http event-stream的event类型。
+                # 直接映射就好，因为sse_event可以自定义为任何类型，http协议并没有做任何限制
                 sse_event = _lg_mode_to_sse_event(single_mode)
+                # 将chunk的内容序列化之后push到bridge中，然后由bridge给sse消费，传输给前端
                 await bridge.publish(run_id, sse_event, serialize(chunk, mode=single_mode))
         else:
+            # 当使用多个stream_mode的时候，agent返回的是一个二元组（mode, data）
             # Multiple modes or subgraphs: astream yields tuples
             async for item in agent.astream(
                 graph_input,
@@ -409,24 +467,33 @@ async def run_agent(
                 stream_mode=lg_modes,
                 subgraphs=stream_subgraphs,
             ):
+                # 同样的，如果RunRecord被后来的run给中断了或回滚了，直接跳出循环
                 if record.abort_event.is_set():
                     logger.info("Run %s abort requested — stopping", run_id)
                     break
-
+                # 将item解析为mode 和 chunk的结构
                 mode, chunk = _unpack_stream_item(item, lg_modes, stream_subgraphs)
+                # 如果mode不存在，继续循环
                 if mode is None:
                     continue
 
+                # 后续流程和前面的分支一致
                 llm_error_fallback_message = llm_error_fallback_message or _extract_llm_error_fallback_message(chunk)
                 sse_event = _lg_mode_to_sse_event(mode)
                 await bridge.publish(run_id, sse_event, serialize(chunk, mode=mode))
 
         # 8. Final status
+        # 如果判断出当前的RunRecord的abort_event被设置了，即被后续的run给中断了
         if record.abort_event.is_set():
+            # 获取它的abort_action来决定后续的操作
+            # abort_action是被中断它的那次run设置的，详见RunManager的create_or_reject方法
             action = record.abort_action
+            # 如果操作是rollback的话
             if action == "rollback":
+                # 将RunRecord的内存和db状态都更新为error，并标注原因
                 await run_manager.set_status(run_id, RunStatus.error, error="Rolled back by user")
                 try:
+                    # 回滚到上一个checkpoint的状态
                     await _rollback_to_pre_run_checkpoint(
                         checkpointer=checkpointer,
                         thread_id=thread_id,
@@ -439,14 +506,19 @@ async def run_agent(
                 except Exception:
                     logger.warning("Failed to rollback checkpoint for run %s", run_id, exc_info=True)
             else:
+                # 如果操作是interrupt的话，更新对应RunRecord在RunManager中的内存状态和db状态
+                # 实际在create_or_reject方法里面就已经更新了，这里可能是为了兜底吧
                 await run_manager.set_status(run_id, RunStatus.interrupted)
+        # 如果存在llm错误兜底信息 或者journal里面存在llm错误兜底信息
         elif llm_error_fallback_message or (journal is not None and journal.had_llm_error_fallback):
             error_msg = llm_error_fallback_message
             if error_msg is None and journal is not None:
                 error_msg = journal.llm_error_fallback_message
             error_msg = error_msg or "LLM provider failed after retries"
+            # 将错误兜底信息获取出来，更新RunRecord在RunManager中的内存状态，并持久化到db
             await run_manager.set_status(run_id, RunStatus.error, error=error_msg)
         else:
+            # 其他情况将RunRecord状态更新为success并持久化到db
             await run_manager.set_status(run_id, RunStatus.success)
 
     except asyncio.CancelledError:
@@ -655,23 +727,31 @@ def _lg_mode_to_sse_event(mode: str) -> str:
 
 
 def _error_fallback_message_from_metadata(metadata: dict[str, Any], content: Any) -> str:
+    # 如果存在error_detail，返回
     detail = metadata.get("error_detail")
     if isinstance(detail, str) and detail.strip():
         return detail.strip()
+    # 如果存在error_reason，返回
     reason = metadata.get("error_reason")
     if isinstance(reason, str) and reason.strip():
         return reason.strip()
+    # 如果content是str，截取前2000个字符返回
     if isinstance(content, str) and content.strip():
         return content.strip()[:2000]
+    # 最后返回兜底信息
     return "LLM provider failed after retries"
 
 
 def _try_extract_from_message(obj: Any) -> str | None:
     """Try to extract fallback marker from a single message object or dict."""
+    # 获取消息的additional_kwargs
     additional_kwargs = getattr(obj, "additional_kwargs", None)
+    # 如果附加属性里面存在deerflow_error_fallback=true
     if isinstance(additional_kwargs, dict) and additional_kwargs.get("deerflow_error_fallback"):
+        # 解析消息中的元数据和content，返回错误兜底信息
         return _error_fallback_message_from_metadata(additional_kwargs, getattr(obj, "content", None))
 
+    # 如果msg是一个dict，逻辑不变
     if isinstance(obj, dict):
         nested_kwargs = obj.get("additional_kwargs")
         if isinstance(nested_kwargs, dict) and nested_kwargs.get("deerflow_error_fallback"):
@@ -688,34 +768,45 @@ def _extract_llm_error_fallback_message(value: Any) -> str | None:
     # Fast path: large state chunks produced by stream_mode="values" have a
     # top-level "messages" list. Scanning only that list avoids expensive deep
     # recursion into large state dicts.
+    # 如果stream_mode是values的情况，入参传入的value就是整个AgentState的快照，所以肯定有messages这个属性
     if isinstance(value, dict):
         messages = value.get("messages")
+        # 如果messages是list或者tuple类型的
         if isinstance(messages, (list, tuple)):
+            # 遍历messages，逐个解析消息
             for msg in messages:
+                # 根据message中的additional_kwargs和metadata以及content等信息提取出错误降低信息
                 result = _try_extract_from_message(msg)
+                # 只要有一个结果被提取出来，直接返回
                 if result is not None:
                     return result
             # Fallback marker is attached to an AI message in the messages
             # channel; it will never appear elsewhere in a values chunk.
+            # 降低标志被当作一个AI message添加到messages列表中，它不会出现在其他地方，对于values类型的chunk来说
             return None
         # No top-level "messages" — this is likely an "updates" chunk (small
         # dict keyed by node name). Fall through to deep walk, which is cheap
         # for these payloads.
+        # 如果顶层没有messages这个属性，那么有可能是updates类型的chunk，是以node_name为key的，走后面的deep walk
 
     # Deep walk for updates / messages / tuple / list modes. Payloads are
     # small, so full recursion is acceptable here.
+    # 其他模式进行deep walk，其他模式每个chunk的payload比较小，所以全量递归是可以接受的
     seen: set[int] = set()
 
     def walk(obj: Any) -> str | None:
+        # 先判断该对象有没有被查看过，如果有，直接返回，如果没有，添加进set中
         oid = id(obj)
         if oid in seen:
             return None
         seen.add(oid)
 
+        # 解析错误兜底信息，如果不为None，返回
         result = _try_extract_from_message(obj)
         if result is not None:
             return result
 
+        # 如果obj是dict类型的，遍历它values中的所有元素，递归walk
         if isinstance(obj, dict):
             for item in obj.values():
                 result = walk(item)
@@ -723,6 +814,7 @@ def _extract_llm_error_fallback_message(value: Any) -> str | None:
                     return result
             return None
 
+        # 如果obj是集合类型的，遍历所有元素，递归walk
         if isinstance(obj, (list, tuple, set)):
             for item in obj:
                 result = walk(item)
@@ -730,6 +822,7 @@ def _extract_llm_error_fallback_message(value: Any) -> str | None:
                     return result
         return None
 
+    # 调用walk来进行解析
     return walk(value)
 
 
