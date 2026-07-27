@@ -464,6 +464,7 @@ async def sse_consumer(
     """
     last_event_id = request.headers.get("Last-Event-ID")
     try:
+        # 订阅run_id对应的event数据，并且传入last_evnet_id
         async for entry in bridge.subscribe(record.run_id, last_event_id=last_event_id):
             if await request.is_disconnected():
                 break

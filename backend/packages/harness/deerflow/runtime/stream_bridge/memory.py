@@ -30,20 +30,26 @@ class MemoryStreamBridge(StreamBridge):
     """
 
     def __init__(self, *, queue_maxsize: int = 256) -> None:
+        # 用于限制单个run_id能保存的events的数量
         self._maxsize = queue_maxsize
+        # key对应的是run_id
         self._streams: dict[str, _RunStream] = {}
+        # 用于统计run_id产生的event的数量
         self._counters: dict[str, int] = {}
 
     # -- helpers ---------------------------------------------------------------
 
     def _get_or_create_stream(self, run_id: str) -> _RunStream:
+        # 判断run_id是否在_streams中，如果不存在，初始化对应的_RunStream对象
         if run_id not in self._streams:
             self._streams[run_id] = _RunStream()
             self._counters[run_id] = 0
         return self._streams[run_id]
 
     def _next_id(self, run_id: str) -> str:
+        # 维护run_id产生的event的数量
         self._counters[run_id] = self._counters.get(run_id, 0) + 1
+        # 并且根据seq生成event的唯一id
         ts = int(time.time() * 1000)
         seq = self._counters[run_id] - 1
         return f"{ts}-{seq}"
@@ -66,14 +72,21 @@ class MemoryStreamBridge(StreamBridge):
     # -- StreamBridge API ------------------------------------------------------
 
     async def publish(self, run_id: str, event: str, data: Any) -> None:
+        # 根据run_id获取或创建对应的RunStream对象，用于存储StreamEvent
         stream = self._get_or_create_stream(run_id)
+        # 创建对应的StreamEvent
         entry = StreamEvent(id=self._next_id(run_id), event=event, data=data)
         async with stream.condition:
+            # 将event添加进RunStream的events集合中
             stream.events.append(entry)
+            # 如果events的长度已经超过最大值了
             if len(stream.events) > self._maxsize:
+                # 计算超出的数量，并队列前面删除掉这些events
                 overflow = len(stream.events) - self._maxsize
                 del stream.events[:overflow]
+                # 维护events队列的元素起始偏移量
                 stream.start_offset += overflow
+            # 唤醒等待在condition上的其他task
             stream.condition.notify_all()
 
     async def publish_end(self, run_id: str) -> None:
@@ -89,6 +102,7 @@ class MemoryStreamBridge(StreamBridge):
         last_event_id: str | None = None,
         heartbeat_interval: float = 15.0,
     ) -> AsyncIterator[StreamEvent]:
+        # 获取或者创建run_id对应的RunStream对象
         stream = self._get_or_create_stream(run_id)
         async with stream.condition:
             next_offset = self._resolve_start_offset(stream, last_event_id)

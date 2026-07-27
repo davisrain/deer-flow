@@ -180,6 +180,7 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
     async with AsyncExitStack() as stack:
         config = startup_config
 
+        # 创建stream_bridge，用于和前端交互SSE
         app.state.stream_bridge = await stack.enter_async_context(make_stream_bridge(config))
 
         # Initialize persistence engine BEFORE checkpointer so that
@@ -189,6 +190,7 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
         await init_engine_from_config(config.database)
 
         # 根据配置文件创建checkpointer
+        # 默认是InMemorySaver
         app.state.checkpointer = await stack.enter_async_context(make_checkpointer(config))
         # 创建checkpointer对应的store对象
         # 配置文件中，默认是没有配置checkpointer模块的，因此默认使用的是InMemoryStore，内存存储器
@@ -310,6 +312,7 @@ def get_run_context(request: Request) -> RunContext:
     """
     return RunContext(
         # 保存/恢复对话状态（多轮记忆）
+        # 默认使用InMemorySaver，内存层面
         checkpointer=get_checkpointer(request),
         # 跨线程共享数据（用户记忆等）
         # 默认使用InMemoryStore，内存层面

@@ -263,6 +263,7 @@ class RunManager:
     async def update_run_completion(self, run_id: str, **kwargs) -> None:
         """Persist token usage and completion data to the backing store."""
         row_recovery_payload: dict[str, Any] | None = None
+        # 更新内存里的RunRecord的各个属性
         async with self._lock:
             record = self._runs.get(run_id)
             if record is not None:
@@ -276,6 +277,7 @@ class RunManager:
         if self._store is None:
             return
         try:
+            # 将RunRecord的数据出久化到db
             updated = await self._call_store_with_retry(
                 "update_run_completion",
                 run_id,

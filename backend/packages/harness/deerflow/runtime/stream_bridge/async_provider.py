@@ -37,9 +37,11 @@ async def make_stream_bridge(app_config: AppConfig | None = None) -> AsyncIterat
     else:
         config = app_config.stream_bridge
 
+    # 默认是memory
     if config is None or config.type == "memory":
         from deerflow.runtime.stream_bridge.memory import MemoryStreamBridge
 
+        # 创建MemoryStreamBridge，最大容量设置为256
         maxsize = config.queue_maxsize if config is not None else 256
         bridge = MemoryStreamBridge(queue_maxsize=maxsize)
         logger.info("Stream bridge initialised: memory (queue_maxsize=%d)", maxsize)

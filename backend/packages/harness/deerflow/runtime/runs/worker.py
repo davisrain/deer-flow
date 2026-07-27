@@ -247,6 +247,8 @@ async def run_agent(
         # suppressed tool calls). Double-underscore prefix marks it as a
         # runtime-internal channel; user code must not depend on the key name.
         # todo 确认下这里在干嘛
+        # 将journal放进runtime_ctx中，让journal在运行中能够被找到
+        # 并且__开始的key表示这是一个内部变量，用户并不感知
         if journal is not None:
             runtime_ctx["__run_journal"] = journal
 
@@ -544,7 +546,9 @@ async def run_agent(
     except Exception as exc:
         error_msg = f"{exc}"
         logger.exception("Run %s failed: %s", run_id, error_msg)
+        # 如果出现了异常，更新RunRecord状态为error
         await run_manager.set_status(run_id, RunStatus.error, error=error_msg)
+        # 并且向stream_bridge publish异常信息
         await bridge.publish(
             run_id,
             "error",
@@ -565,8 +569,9 @@ async def run_agent(
 
             try:
                 # Persist token usage + convenience fields to RunStore
+                # 获取journal里面统计的完整的token等信息 llm_invoke_count msg_count first_human_msg last_ai_msg等信息
                 completion = journal.get_completion_data()
-                # 把 token 用量写入 RunStore（run 完成数据）
+                # 将上一步获取到的journal中统计的信息更新到RunRecord中
                 await run_manager.update_run_completion(run_id, status=record.status.value, **completion)
             except Exception:
                 logger.warning("Failed to persist run completion for %s (non-fatal)", run_id, exc_info=True)
@@ -577,6 +582,7 @@ async def run_agent(
             try:
                 ckpt_config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
                 ckpt_tuple = await checkpointer.aget_tuple(ckpt_config)
+                # 从checkpoint里面获取到State里面的title字段，作为整个thread的标题维护进thread里面，这个就是前端看到的每个会话的标题
                 if ckpt_tuple is not None:
                     ckpt = getattr(ckpt_tuple, "checkpoint", {}) or {}
                     title = ckpt.get("channel_values", {}).get("title")
@@ -589,6 +595,7 @@ async def run_agent(
         # 更新 thread 状态（running → idle）
         if thread_store is not None:
             try:
+                # 如果RunRecord的最终状态是success，更新thread的状态为idle，否则，将RunRecord的状态更新到thread中
                 final_status = "idle" if record.status == RunStatus.success else record.status.value
                 await thread_store.update_status(thread_id, final_status)
             except Exception:
@@ -626,14 +633,15 @@ async def _rollback_to_pre_run_checkpoint(
     snapshot_capture_failed: bool,
 ) -> None:
     """Restore thread state to the checkpoint snapshot captured before run start."""
+    # 如果checkpointer不存在的话，打印日志，直接返回
     if checkpointer is None:
         logger.info("Run %s rollback requested but no checkpointer is configured", run_id)
         return
-
+    # 如果前面获取checkpoint的快照失败了，也打印日志，直接返回
     if snapshot_capture_failed:
         logger.warning("Run %s rollback skipped: pre-run checkpoint snapshot capture failed", run_id)
         return
-
+    # 如果上一次checkpoint的快照不存在，调用checkpointer的删除方法，将thread_id对应的快照清空后返回
     if pre_run_snapshot is None:
         await _call_checkpointer_method(checkpointer, "adelete_thread", "delete_thread", thread_id)
         logger.info("Run %s rollback reset thread %s to empty state", run_id, thread_id)
@@ -642,22 +650,29 @@ async def _rollback_to_pre_run_checkpoint(
     checkpoint_to_restore = None
     metadata_to_restore: dict[str, Any] = {}
     checkpoint_ns = ""
+    # 从之前获取的快照中获取checkpoint的值
     checkpoint = pre_run_snapshot.get("checkpoint")
+    # 如果checkpoint不是dict的话，返回
     if not isinstance(checkpoint, dict):
         logger.warning("Run %s rollback skipped: invalid pre-run checkpoint snapshot", run_id)
         return
     checkpoint_to_restore = checkpoint
+    # 如果保存的快照里面没有id，但存在pre_run_checkpoint_id，将其赋值给快照
     if checkpoint_to_restore.get("id") is None and pre_run_checkpoint_id is not None:
         checkpoint_to_restore = {**checkpoint_to_restore, "id": pre_run_checkpoint_id}
+    # 如果快照里面仍没有id，返回
     if checkpoint_to_restore.get("id") is None:
         logger.warning("Run %s rollback skipped: pre-run checkpoint has no checkpoint id", run_id)
         return
+    # 创建一个新的checkpoint_maker，即id 和 ts
     restore_marker = _new_checkpoint_marker()
+    # 将其更新到restore快照中
     checkpoint_to_restore = {
         **checkpoint_to_restore,
         "id": restore_marker["id"],
         "ts": restore_marker["ts"],
     }
+    # 从快照中获取metadata和namespace、channel_versions
     metadata = pre_run_snapshot.get("metadata", {})
     metadata_to_restore = metadata if isinstance(metadata, dict) else {}
     raw_checkpoint_ns = pre_run_snapshot.get("checkpoint_ns")
@@ -667,6 +682,7 @@ async def _rollback_to_pre_run_checkpoint(
     new_versions = dict(channel_versions) if isinstance(channel_versions, dict) else {}
 
     restore_config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": checkpoint_ns}}
+    # 保存新的checkpoint
     restored_config = await _call_checkpointer_method(
         checkpointer,
         "aput",
@@ -685,6 +701,7 @@ async def _rollback_to_pre_run_checkpoint(
     if not restored_checkpoint_id:
         raise RuntimeError(f"Run {run_id} rollback restore did not return checkpoint_id")
 
+    # 将上一次checkpoint的pending_writes也写入到回滚后的新的checkpoint中
     pending_writes = pre_run_snapshot.get("pending_writes", [])
     if not pending_writes:
         return
