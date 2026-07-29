@@ -44,6 +44,7 @@ class LocalSkillStorage(SkillStorage):
 
             config = app_config or get_app_config()
             self._host_root: Path = config.skills.get_skills_path()
+        # 设置skill文件保存的地址，默认是backend目录的parent目录下的skills文件夹
         else:
             self._host_root = resolve_path(host_path)
 

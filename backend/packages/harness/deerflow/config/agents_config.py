@@ -64,12 +64,18 @@ def resolve_agent_dir(name: str, *, user_id: str | None = None) -> Path:
         user_id: Owner of the agent. Defaults to the effective user from the
             request context (or ``"default"`` in no-auth mode).
     """
+    # 获取单例Paths对象
     paths = get_paths()
+    # 获取user_id
     effective_user = user_id or get_effective_user_id()
+    # 尝试在查找user目录下对应的为name的路径
+    # 默认是{project_root}/.deer-flow/users/{user_id}/agents/{name}
     user_path = paths.user_agent_dir(effective_user, name)
+    # 如果存在，直接返回
     if user_path.exists():
         return user_path
 
+    # 如果不存在的话，降低为查找{project_root}/.deer-flow/agents/{name}
     legacy_path = paths.agent_dir(name)
     if legacy_path.exists():
         return legacy_path
@@ -95,20 +101,24 @@ def load_agent_config(name: str | None, *, user_id: str | None = None) -> AgentC
         FileNotFoundError: If the agent directory or config.yaml does not exist.
         ValueError: If config.yaml cannot be parsed.
     """
-
+    # 如果没有指定自定义agent的name，直接返回None
     if name is None:
         return None
 
     name = validate_agent_name(name)
+    # 获取对应的agent目录
     agent_dir = resolve_agent_dir(name, user_id=user_id)
+    # 查找目录下面的config.yaml文件
     config_file = agent_dir / "config.yaml"
 
+    # 如果目录或文件不存在，报错
     if not agent_dir.exists():
         raise FileNotFoundError(f"Agent directory not found: {agent_dir}")
 
     if not config_file.exists():
         raise FileNotFoundError(f"Agent config not found: {config_file}")
 
+    # 加载配置文件
     try:
         with open(config_file, encoding="utf-8") as f:
             data: dict[str, Any] = yaml.safe_load(f) or {}
@@ -116,10 +126,12 @@ def load_agent_config(name: str | None, *, user_id: str | None = None) -> AgentC
         raise ValueError(f"Failed to parse agent config {config_file}: {e}") from e
 
     # Ensure name is set from directory name if not in file
+    # 如果name不存在，添加name进配置中
     if "name" not in data:
         data["name"] = name
 
     # Strip unknown fields before passing to Pydantic (e.g. legacy prompt_file)
+    # 将dict类型的配置转换成AgentConfig对象
     known_fields = set(AgentConfig.model_fields.keys())
     data = {k: v for k, v in data.items() if k in known_fields}
 

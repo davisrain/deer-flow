@@ -190,7 +190,7 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
         await init_engine_from_config(config.database)
 
         # 根据配置文件创建checkpointer
-        # 默认是InMemorySaver
+        # 现在配置文件中checkpointer模块已经过时了，使用database模块的配置，那么默认的就是持久化到sqlite的checkpointer
         app.state.checkpointer = await stack.enter_async_context(make_checkpointer(config))
         # 创建checkpointer对应的store对象
         # 配置文件中，默认是没有配置checkpointer模块的，因此默认使用的是InMemoryStore，内存存储器

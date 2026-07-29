@@ -132,12 +132,15 @@ class Paths:
     @property
     def base_dir(self) -> Path:
         """Root directory for all application data."""
+        # 如果自身存在_base_dir属性，直接返回，在new对象的时候传入的
         if self._base_dir is not None:
             return self._base_dir
 
+        # 尝试获取环境变量DEER_FLOW_HOME指定的目录
         if env_home := os.getenv("DEER_FLOW_HOME"):
             return Path(env_home).resolve()
 
+        # 获取默认的本地base_dir，默认是${project_root}/.deer-flow
         return _default_local_base_dir()
 
     @property

@@ -52,11 +52,13 @@ def format_sse(event: str, data: Any, *, event_id: str | None = None) -> str:
     ``useStream`` React hook and the Python ``langgraph-sdk`` SSE decoder.
     """
     payload = json.dumps(data, default=str, ensure_ascii=False)
+    # 添加event data id等数据
     parts = [f"event: {event}", f"data: {payload}"]
     if event_id:
         parts.append(f"id: {event_id}")
     parts.append("")
     parts.append("")
+    # 每个元素以\n结尾，然后整个event消息以两个\n结尾
     return "\n".join(parts)
 
 
@@ -466,21 +468,27 @@ async def sse_consumer(
     try:
         # 订阅run_id对应的event数据，并且传入last_evnet_id
         async for entry in bridge.subscribe(record.run_id, last_event_id=last_event_id):
+            # 如果前端的请求已经断开链接了，那么也跳出这个获取event的循环
             if await request.is_disconnected():
                 break
 
+            # 如果是HEARTBEAT_SENTINEL event，返回心跳事件
             if entry is HEARTBEAT_SENTINEL:
                 yield ": heartbeat\n\n"
                 continue
 
+            # 如果是END_SENTINEL，返回end事件
             if entry is END_SENTINEL:
+                # 将event格式化为http的sse格式
                 yield format_sse("end", None, event_id=entry.id or None)
                 return
-
+            # 其余情况，格式化sse返回
             yield format_sse(entry.event, entry.data, event_id=entry.id or None)
 
     finally:
-        if record.status in (RunStatus.pending, RunStatus.running):
+        # 循环结束之后判断 record的状态，如果仍然是pending或者running
+        if record.status in (RunStatus.pending, RunStatus.running,):
+            # 查看record的on_disconnect的模式，如果是cancel的话，调用RunManager的取消方法
             if record.on_disconnect == DisconnectMode.cancel:
                 await run_mgr.cancel(record.run_id)
 

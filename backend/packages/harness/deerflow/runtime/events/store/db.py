@@ -29,7 +29,9 @@ class DbRunEventStore(RunEventStore):
 
     @staticmethod
     def _row_to_dict(row: RunEventRow) -> dict:
+        # 将持久化对象转换为dict类型的
         d = row.to_dict()
+        # 将event_metadata转换成metadata
         d["metadata"] = d.pop("event_metadata", {})
         val = d.get("created_at")
         if isinstance(val, datetime):
@@ -40,8 +42,10 @@ class DbRunEventStore(RunEventStore):
         # Restore structured content that was JSON-serialized on write.
         raw = d.get("content", "")
         metadata = d.get("metadata", {})
+        # 如果content内容是str 且 metadata里面说明了content是json或者dict
         if isinstance(raw, str) and (metadata.get("content_is_json") or metadata.get("content_is_dict")):
             try:
+                # 使用json进行反序列化
                 d["content"] = json.loads(raw)
             except (json.JSONDecodeError, ValueError):
                 # Content looked like JSON but failed to parse;
@@ -50,6 +54,7 @@ class DbRunEventStore(RunEventStore):
         return d
 
     def _truncate_trace(self, category: str, content: Any, metadata: dict | None) -> tuple[Any, dict]:
+        # 如果是trace类型的，对content内容做截断，并且将截断标志和原始长度放入metadata中
         if category == "trace":
             text = content if isinstance(content, str) else json.dumps(content, default=str, ensure_ascii=False)
             encoded = text.encode("utf-8")
@@ -61,14 +66,19 @@ class DbRunEventStore(RunEventStore):
 
     @staticmethod
     def _content_to_db(content: Any, metadata: dict | None) -> tuple[str, dict]:
+        # 如果content就是str类型，直接返回
         metadata = metadata or {}
         if isinstance(content, str):
             return content, metadata
 
+        # 否则将content序列化为json字符串
         db_content = json.dumps(content, default=str, ensure_ascii=False)
+        # 并且在metadata里面标注content是json
         metadata = {**metadata, "content_is_json": True}
+        # 如果content原本是dict类型的，也在metadata里面标注
         if isinstance(content, dict):
             metadata["content_is_dict"] = True
+        # 返回序列化之后的content
         return db_content, metadata
 
     @staticmethod
@@ -144,23 +154,31 @@ class DbRunEventStore(RunEventStore):
     async def put_batch(self, events):
         if not events:
             return []
+        # 获取所有要批量put的events中的thread_id集合
         thread_ids = {e["thread_id"] for e in events}
+        # 如果来自不同的thread_id，报错
         if len(thread_ids) > 1:
             raise ValueError(f"put_batch requires all events to belong to the same thread; got {thread_ids!r}")
         user_id = self._user_id_from_context()
         async with self._sf() as session:
+            # session.begion 自动提交事务
             async with session.begin():
                 # All events belong to the same thread (validated above).
                 thread_id = events[0]["thread_id"]
+                # 获取当前thread_id对应的event中最大的seq
                 max_seq = await self._max_seq_for_thread(session, thread_id)
                 seq = max_seq or 0
                 rows = []
+                # 遍历events列表
                 for e in events:
                     seq += 1
+                    # 获取content、category、metadata属性
                     content = e.get("content", "")
                     category = e.get("category", "trace")
                     metadata = e.get("metadata")
+                    # 对trace类型的event的content做截断
                     content, metadata = self._truncate_trace(category, content, metadata)
+                    # 将content转换成db能保存的数据
                     db_content, metadata = self._content_to_db(content, metadata)
                     row = RunEventRow(
                         thread_id=e["thread_id"],
@@ -173,6 +191,7 @@ class DbRunEventStore(RunEventStore):
                         seq=seq,
                         created_at=datetime.fromisoformat(e["created_at"]) if e.get("created_at") else datetime.now(UTC),
                     )
+                    # 插入到db
                     session.add(row)
                     rows.append(row)
             return [self._row_to_dict(r) for r in rows]
@@ -240,11 +259,13 @@ class DbRunEventStore(RunEventStore):
         user_id: str | None | _AutoSentinel = AUTO,
     ):
         resolved_user_id = resolve_user_id(user_id, method_name="DbRunEventStore.list_messages_by_run")
+        # 构建从db中查找thread_id和run_id对应的message类型的event的sql
         stmt = select(RunEventRow).where(
             RunEventRow.thread_id == thread_id,
             RunEventRow.run_id == run_id,
             RunEventRow.category == "message",
         )
+        # 如果user_id before_seq after_seq条件存在，拼接到sql中
         if resolved_user_id is not None:
             stmt = stmt.where(RunEventRow.user_id == resolved_user_id)
         if before_seq is not None:
@@ -252,16 +273,19 @@ class DbRunEventStore(RunEventStore):
         if after_seq is not None:
             stmt = stmt.where(RunEventRow.seq > after_seq)
 
+        # 如果after_seq存在，按照seq正序limit
         if after_seq is not None:
             stmt = stmt.order_by(RunEventRow.seq.asc()).limit(limit)
             async with self._sf() as session:
                 result = await session.execute(stmt)
                 return [self._row_to_dict(r) for r in result.scalars()]
+        # 其他情况 按照seq倒序limit
         else:
             stmt = stmt.order_by(RunEventRow.seq.desc()).limit(limit)
             async with self._sf() as session:
                 result = await session.execute(stmt)
                 rows = list(result.scalars())
+                # 最后解析到时候再将rows倒序回来
                 return [self._row_to_dict(r) for r in reversed(rows)]
 
     async def count_messages(

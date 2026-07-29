@@ -485,19 +485,25 @@ class RunManager:
         reached a terminal state other than interrupted (completed, failed, etc.).
         """
         async with self._lock:
+            # 从内存中获取RunRecord
             record = self._runs.get(run_id)
+            # 如果没找到，直接返回false，表示取消失败
             if record is None:
                 return False
+            # 如果状态已经是interrupted了，返回true
             if record.status == RunStatus.interrupted:
                 return True  # idempotent — already cancelled on this worker
+            # 如果状态不是pending 或者 running，返回失败
             if record.status not in (RunStatus.pending, RunStatus.running):
                 return False
             record.abort_action = action
             record.abort_event.set()
+            # 如果task存在且没有done，取消task
             if record.task is not None and not record.task.done():
                 record.task.cancel()
             record.status = RunStatus.interrupted
             record.updated_at = _now_iso()
+        # 持久化RunRecord的状态
         await self._persist_status(record, RunStatus.interrupted)
         logger.info("Run %s cancelled (action=%s)", run_id, action)
         return True

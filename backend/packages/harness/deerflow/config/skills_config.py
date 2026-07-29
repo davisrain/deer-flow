@@ -42,16 +42,20 @@ class SkillsConfig(BaseModel):
         When none of (3) or (4) exist on disk, the project-root default is returned so callers
         can still surface a stable "no skills" location without raising.
         """
+        # 如果存在path属性，解析完之后直接返回，但默认是不存在的
         if self.path:
             # Use configured path (can be absolute or relative to project root)
             return resolve_path(self.path)
+        # 尝试从环境变量中获取并解析返回
         if env_path := os.getenv("DEER_FLOW_SKILLS_PATH"):
             return resolve_path(env_path)
 
+        # 兜底为{project_root}/skills，如果是目录就返回
         project_default = project_root() / "skills"
         if project_default.is_dir():
             return project_default
 
+        # 否则从backend目录的parent所在目录下找skills文件夹，找到了就返回
         for candidate in _legacy_skills_candidates():
             if candidate.is_dir():
                 return candidate

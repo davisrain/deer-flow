@@ -52,23 +52,31 @@ logger = logging.getLogger(__name__)
 
 def _get_runtime_config(config: RunnableConfig) -> dict:
     """Merge legacy configurable options with LangGraph runtime context."""
+    # 将RunnableConfig中的configurable和context属性都拿出来
     cfg = dict(config.get("configurable", {}) or {})
     context = config.get("context", {}) or {}
+    # 如果context存在的话，将context中的属性都更新到configurable里面
     if isinstance(context, dict):
         cfg.update(context)
+    # 然后返回configurable
     return cfg
 
 
 def _resolve_model_name(requested_model_name: str | None = None, *, app_config: AppConfig | None = None) -> str:
     """Resolve a runtime model name safely, falling back to default if invalid. Returns None if no models are configured."""
+    # 获取整个项目的config.yaml配置
     app_config = app_config or get_app_config()
+    # 拿到models模块配置的第一个模型的名称作为默认模型名称
     default_model_name = app_config.models[0].name if app_config.models else None
+    # 如果不存在默认模型，报错
     if default_model_name is None:
         raise ValueError("No chat models are configured. Please configure at least one model in config.yaml.")
 
+    # 如果请求的模型名称存在，且配置也存在，返回请求的模型名称
     if requested_model_name and app_config.get_model_config(requested_model_name):
         return requested_model_name
 
+    # 如果请求的模型名称存在，但配置不存在，打印日志，用默认模型兜底
     if requested_model_name and requested_model_name != default_model_name:
         logger.warning(f"Model '{requested_model_name}' not found in config; fallback to default model '{default_model_name}'.")
     return default_model_name
@@ -496,11 +504,13 @@ def _load_enabled_skills_for_tool_policy(available_skills: set[str] | None, *, a
     try:
         from deerflow.agents.lead_agent.prompt import get_enabled_skills_for_config
 
+        # 根据项目配置文件加载对应的skill文件并解析为Skill对象
         skills = get_enabled_skills_for_config(app_config)
     except Exception:
         logger.exception("Failed to load skills for allowed-tools policy")
         raise
 
+    # 如果存在可用的skills限制，过滤后返回，否则直接返回加载到的集合
     if available_skills is None:
         return skills
     return [skill for skill in skills if skill.name in available_skills]
@@ -508,8 +518,11 @@ def _load_enabled_skills_for_tool_policy(available_skills: set[str] | None, *, a
 
 def make_lead_agent(config: RunnableConfig):
     """LangGraph graph factory; keep the signature compatible with LangGraph Server."""
+    # 获取RunnableConfig中的configurable，如果RunnableConfig中存在context的话，将context的所有属性都更新到configurable中
     runtime_config = _get_runtime_config(config)
+    # 获取保存在configurable里面的app_config属性，也就是config.yaml配置文件的内容
     runtime_app_config = runtime_config.get("app_config")
+    # 将app_config和RunnableConfig都传入，调用内部的_make_lead_agent方法
     return _make_lead_agent(config, app_config=runtime_app_config or get_app_config())
 
 
@@ -519,9 +532,11 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
     from deerflow.tools.builtins import setup_agent, update_agent
     from deerflow.tools.builtins.tool_search import assemble_deferred_tools
 
+    # 获取到configurable的内容作为cfg，将配置文件里的配置作为resolved_app_config
     cfg = _get_runtime_config(config)
     resolved_app_config = app_config
 
+    # 从configurable里面获取agent运行时的一些参数
     thinking_enabled = cfg.get("thinking_enabled", True)
     reasoning_effort = cfg.get("reasoning_effort", None)
     requested_model_name: str | None = cfg.get("model_name") or cfg.get("model")
@@ -529,24 +544,34 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
     subagent_enabled = cfg.get("subagent_enabled", False)
     max_concurrent_subagents = cfg.get("max_concurrent_subagents", 3)
     is_bootstrap = cfg.get("is_bootstrap", False)
+    # 尝试去configurable里面获取agent_name属性，如果agent_name就是lead_agent的话，是不会有这个属性的
     agent_name = validate_agent_name(cfg.get("agent_name"))
 
+    # 尝试根据agent_name获取自定义agent的配置，返回类型为AgentConfig，如果agent_name不存在的话，该配置也不存在
     agent_config = load_agent_config(agent_name) if not is_bootstrap else None
+    # 如果存在自定义的agent配置，获取配置中的skills；如果is_bootstrap是true，返回bootstrap，否则返回None
     available_skills = _available_skill_names(agent_config, is_bootstrap)
     # Custom agent model from agent config (if any), or None to let _resolve_model_name pick the default
+    # 尝试获取自定义agent使用的模型名称
     agent_model_name = agent_config.model if agent_config and agent_config.model else None
 
     # Final model name resolution: request → agent config → global default, with fallback for unknown names
+    # 解析模型名称的优先级是：前端请求传入的模型 > 自定义agent配置的模型 > 整个app的config.yaml里面配置的第一个模型（兜底）。
+    # 前两个模型名称生效的前提都是在 app config.yaml文件中的models模块有配置
     model_name = _resolve_model_name(requested_model_name or agent_model_name, app_config=resolved_app_config)
 
+    # 获取模型配置
     model_config = resolved_app_config.get_model_config(model_name)
 
+    # 模型配置不存在，报错
     if model_config is None:
         raise ValueError("No chat model could be resolved. Please configure at least one model in config.yaml or provide a valid 'model_name'/'model' in the request.")
+    # 如果模型配置不支持thinking模式 但是 前端穿参要求开启thinking模式，打印日志，将thinking_enabled设置为false
     if thinking_enabled and not model_config.supports_thinking:
         logger.warning(f"Thinking mode is enabled but model '{model_name}' does not support it; fallback to non-thinking mode.")
         thinking_enabled = False
 
+    # 打印agent运行配置相关的日志
     logger.info(
         "Create Agent(%s) -> thinking_enabled: %s, reasoning_effort: %s, model_name: %s, is_plan_mode: %s, subagent_enabled: %s, max_concurrent_subagents: %s",
         agent_name or "default",
@@ -559,9 +584,11 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
     )
 
     # Inject run metadata for LangSmith trace tagging
+    # 如果RunnableConfig里面不存在metadata的话，先初始化
     if "metadata" not in config:
         config["metadata"] = {}
 
+    # 向metadata里面更新agent相关的配置信息
     config["metadata"].update(
         {
             "agent_name": agent_name or "default",
@@ -581,13 +608,17 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
     # actually propagates ``langfuse_session_id`` / ``langfuse_user_id`` from
     # ``config["metadata"]`` onto the trace. Without root-level attachment the
     # model is a nested observation and the handler strips ``langfuse_*`` keys.
+
+    # 构建trace相关的langchain handler作为callback
     tracing_callbacks = build_tracing_callbacks()
+    # 如果tracing_callbacks存在的话，将其添加进RunnableConfig的callbacks属性中
     if tracing_callbacks:
         existing = config.get("callbacks") or []
         if not isinstance(existing, list):
             existing = list(existing)
         config["callbacks"] = [*existing, *tracing_callbacks]
 
+    # 加载启用的Skill用作tool的筛选
     skills_for_tool_policy = _load_enabled_skills_for_tool_policy(available_skills, app_config=resolved_app_config)
 
     if is_bootstrap:
@@ -613,8 +644,12 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
     # The default agent (no agent_name) does not see this tool.
     extra_tools = [update_agent] if agent_name else []
     # Default lead agent (unchanged behavior)
+    # 获取可用的工具集合
     raw_tools = get_available_tools(model_name=model_name, groups=agent_config.tool_groups if agent_config else None, subagent_enabled=subagent_enabled, app_config=resolved_app_config)
+    # 根据skills里面配置的allowed_tools对工具集合进行过滤，如果没有任何一个skill配置allowed_tools，不进行过滤
     filtered = filter_tools_by_skill_allowed_tools(raw_tools + extra_tools, skills_for_tool_policy)
+    # 根据配置文件中是否开启tool_search，决定要不要添加tool_search工具到工具集合中，该工具是用于将mcp的工具延时暴露，减少传输给llm的tool_schema，以节约token
+    # 这里实际没有对工具列表做过滤，真正做过滤是在DeferredToolFilterMiddleware里面做的，在每次调用llm之前对模型进行deferred工具过滤。这样做的目的应该是仅对模型产生影响，实际agent执行过程中还是能看到全量的工具的
     final_tools, setup = assemble_deferred_tools(filtered, enabled=resolved_app_config.tool_search.enabled)
     return create_agent(
         model=create_chat_model(name=model_name, thinking_enabled=thinking_enabled, reasoning_effort=reasoning_effort, app_config=resolved_app_config, attach_tracing=False),

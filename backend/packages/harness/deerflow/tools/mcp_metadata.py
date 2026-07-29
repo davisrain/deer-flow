@@ -26,4 +26,5 @@ def tag_mcp_tool(tool: BaseTool) -> BaseTool:
 
 def is_mcp_tool(tool: BaseTool) -> bool:
     """True when ``tool`` carries the MCP-source tag written by :func:`tag_mcp_tool`."""
+    # 从工具metadata中获取deerflow_mcp属性，如果是true，说明是从mcp来的
     return (getattr(tool, "metadata", None) or {}).get(MCP_TOOL_METADATA_KEY) is True

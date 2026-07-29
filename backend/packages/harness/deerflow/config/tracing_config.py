@@ -16,6 +16,7 @@ class LangSmithTracingConfig(BaseModel):
 
     @property
     def is_configured(self) -> bool:
+        # 如果enabled为true，且存在api_key，返回true
         return self.enabled and bool(self.api_key)
 
     def validate(self) -> None:
@@ -33,6 +34,7 @@ class LangfuseTracingConfig(BaseModel):
 
     @property
     def is_configured(self) -> bool:
+        # 如果enabled为true 且存在public 和 secret key，返回true
         return self.enabled and bool(self.public_key) and bool(self.secret_key)
 
     def validate(self) -> None:
@@ -69,6 +71,7 @@ class TracingConfig(BaseModel):
     @property
     def enabled_providers(self) -> list[str]:
         enabled: list[str] = []
+        # 判断langsmith和langfuse是否都开启且正确配置，返回正确配置的providers
         if self.langsmith.is_configured:
             enabled.append("langsmith")
         if self.langfuse.is_configured:
@@ -106,19 +109,27 @@ def _first_env_value(*names: str) -> str | None:
 
 def get_tracing_config() -> TracingConfig:
     """Get the current tracing configuration from environment variables."""
+    # 获取_tracing_config
     global _tracing_config
+    # 如果已经存在，直接返回即可
     if _tracing_config is not None:
         return _tracing_config
+    # 否则加载进行加载
     with _config_lock:
+        # 这里在double check
         if _tracing_config is not None:
             return _tracing_config
+        # 从环境变量里面加载langsmith和langfuse的配置
         _tracing_config = TracingConfig(
             langsmith=LangSmithTracingConfig(
+                # 查看环境变量里是否存在任意为true的配置
                 enabled=_env_flag_preferred("LANGSMITH_TRACING", "LANGCHAIN_TRACING_V2", "LANGCHAIN_TRACING"),
+                # 获取环境变量中存在的第一个配置的值
                 api_key=_first_env_value("LANGSMITH_API_KEY", "LANGCHAIN_API_KEY"),
                 project=_first_env_value("LANGSMITH_PROJECT", "LANGCHAIN_PROJECT") or "deer-flow",
                 endpoint=_first_env_value("LANGSMITH_ENDPOINT", "LANGCHAIN_ENDPOINT") or "https://api.smith.langchain.com",
             ),
+            # 从环境变量中获取langfuse的配置
             langfuse=LangfuseTracingConfig(
                 enabled=_env_flag_preferred("LANGFUSE_TRACING"),
                 public_key=_first_env_value("LANGFUSE_PUBLIC_KEY"),
@@ -126,6 +137,7 @@ def get_tracing_config() -> TracingConfig:
                 host=_first_env_value("LANGFUSE_BASE_URL") or "https://cloud.langfuse.com",
             ),
         )
+        # 返回配置对象
         return _tracing_config
 
 
@@ -141,6 +153,7 @@ def get_explicitly_enabled_tracing_providers() -> list[str]:
 
 def validate_enabled_tracing_providers() -> None:
     """Validate that any explicitly enabled providers are fully configured."""
+    # 获取配置，校验是否是开启，但没有配置api_key等信息
     get_tracing_config().validate_enabled()
 
 

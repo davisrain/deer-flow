@@ -112,32 +112,44 @@ class RunJournal(BaseCallbackHandler):
     @staticmethod
     def _message_text(message: BaseMessage) -> str:
         """Extract displayable text from a message's mixed content shape."""
+        # 获取message当中的content属性
         content = getattr(message, "content", None)
+        # 如果content是str类型的话，直接返回
         if isinstance(content, str):
             return content
+        # 如果content是list类型
         if isinstance(content, list):
             parts: list[str] = []
+            # 遍历content的内容
             for block in content:
+                # 如果某个元素是str类型的，添加到parts集合中
                 if isinstance(block, str):
                     parts.append(block)
+                # 如果是Mapping类型的，获取其text属性
                 elif isinstance(block, Mapping):
                     text = block.get("text")
+                    # 如果text属性是str类型的，添加到parts集合
                     if isinstance(text, str):
                         parts.append(text)
                     else:
+                        # 否则获取block的content属性，如果是str类型，添加到parts集合
                         nested = block.get("content")
                         if isinstance(nested, str):
                             parts.append(nested)
+            # 整合parts为一个str返回
             return "".join(parts)
+        # 如果content是Mapping类型的，尝试获取text和content属性，如果是str，返回
         if isinstance(content, Mapping):
             for key in ("text", "content"):
                 value = content.get(key)
                 if isinstance(value, str):
                     return value
 
+        # 尝试直接获取message的text属性
         text = getattr(message, "text", None)
         if isinstance(text, str):
             return text
+        # 兜底返回空字符串
         return ""
 
     def _record_message_summary(self, message: BaseMessage, *, caller: str | None = None) -> None:

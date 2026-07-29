@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 _ENABLED_SKILLS_REFRESH_WAIT_TIMEOUT_SECONDS = 5.0
 _enabled_skills_lock = threading.Lock()
 _enabled_skills_cache: list[Skill] | None = None
+# key为AppConfig对象的id，value为缓存的配置对象 和 缓存的skill集合
 _enabled_skills_by_config_cache: dict[int, tuple[object, list[Skill]]] = {}
 _enabled_skills_refresh_active = False
 _enabled_skills_refresh_version = 0
@@ -145,10 +146,12 @@ def get_enabled_skills_for_config(app_config: AppConfig | None = None) -> list[S
         cached = _enabled_skills_by_config_cache.get(cache_key)
         if cached is not None:
             cached_config, cached_skills = cached
+            # 如果缓存的配置文件和传入的app_config是同一个对象的话，返回被缓存的Skill集合
             if cached_config is app_config:
                 return list(cached_skills)
 
     # 缓存未命中，使用skill_storage去加载skills
+    # 默认获取到的skill_storage是LocalSkillStorage，使用该storage去加载skills
     skills = list(get_or_new_skill_storage(app_config=app_config).load_skills(enabled_only=True))
     # 加锁，写入缓存
     with _enabled_skills_lock:

@@ -399,7 +399,11 @@ async def list_run_messages(
 
     Response: { data: [...], has_more: bool }
     """
+    # 从request中获取对应的RunEventStore，配置文件默认是memory，对应的是MemoryRunEventStore
+    # 但这样在执行过summary之后，checkpointer中保存的messages其实是不完整的，页面展示会比较奇怪。
+    # 因此最好讲RunEvent的数据持久化下来，使用DbRunEventStore
     event_store = get_run_event_store(request)
+    # 查询每次run对应的message类型的event数据
     rows = await event_store.list_messages_by_run(
         thread_id,
         run_id,
@@ -407,7 +411,9 @@ async def list_run_messages(
         before_seq=before_seq,
         after_seq=after_seq,
     )
+    # 从获取到的event数据中解析出要返回给前端的数据
     data, has_more = trim_run_message_page(rows, limit=limit, after_seq=after_seq)
+    # data实际还是返回的event列表，最终展示应该是前端去解析的
     return {"data": data, "has_more": has_more}
 
 

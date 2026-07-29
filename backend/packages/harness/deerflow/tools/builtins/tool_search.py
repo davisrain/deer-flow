@@ -144,19 +144,24 @@ def build_tool_search_tool(catalog: DeferredToolCatalog) -> BaseTool:
           - "notebook jupyter" -- keyword search, up to max_results best matches
           - "+slack send" -- require "slack" in the name, rank by remaining terms
         """
+        # 从catalog中查找出匹配的工具
         matched = catalog.search(query)[:MAX_RESULTS]
+        # 如果没有的话，返回没找到对应的工具
         if not matched:
             content, names = f"No tools found matching: {query}", []
         else:
+            # 如果找到了，将匹配的工具转换成openai的函数
             content = json.dumps([convert_to_openai_function(t) for t in matched], indent=2, ensure_ascii=False)
             names = [t.name for t in matched]
         return Command(
+            # 然后将找到的工具信息封装成ToolMessage中的content返回
             update={
                 "promoted": {"catalog_hash": catalog_hash, "names": names},
                 "messages": [ToolMessage(content=content, tool_call_id=tool_call_id, name="tool_search")],
             }
         )
 
+    # 返回tool_search工具
     return tool_search
 
 
@@ -170,14 +175,19 @@ def build_deferred_tool_setup(filtered_tools: list[BaseTool], *, enabled: bool) 
     cases: deferral is disabled, or it is enabled but no MCP tool survived
     filtering.
     """
+    # 如果没有开启tool_search，返回一个空的DeferredToolSetup
     if not enabled:
         # Deferral disabled: defer nothing; the model binds every tool as before.
         return DeferredToolSetup(None, frozenset(), None)
+    # 如果开启了，挑选出是mcp提供的tool，作为需要延时暴露的集合
     deferred = [t for t in filtered_tools if is_mcp_tool(t)]
+    # 如果不存在mcp提供的tool，也返回空的DeferredToolSetup
     if not deferred:
         # Enabled, but no MCP tool to defer: same empty result, different reason.
         return DeferredToolSetup(None, frozenset(), None)
+    # 将需要延迟暴露的工具封装成DeferredToolCatalog
     catalog = DeferredToolCatalog(tuple(deferred))
+    # 根据catalog构建出对应的tool_search工具，然后封装成DeferredToolSetup返回
     return DeferredToolSetup(build_tool_search_tool(catalog), catalog.names, catalog.hash)
 
 
@@ -192,12 +202,17 @@ def assemble_deferred_tools(filtered_tools: list[BaseTool], *, enabled: bool) ->
     Shared by every agent-build path (lead, embedded client, subagent) so they
     all get the same fail-closed guarantee from one place.
     """
+    # 构建延迟工具的setup对象
     deferred_setup = build_deferred_tool_setup(filtered_tools, enabled=enabled)
+    # 如果tool_search是开启的，但不存在需要延迟的工具 并且 工具集合中是存在来自mcp的工具的
     if enabled and not deferred_setup.deferred_names and any(is_mcp_tool(t) for t in filtered_tools):
         raise RuntimeError("tool_search enabled and MCP tools survived policy filtering, but no deferred set was recovered - refusing to bind MCP schemas (fail-closed).")
     final_tools = list(filtered_tools)
+    # 如果setup中存在tool_search工具，把它添加进工具列表
     if deferred_setup.tool_search_tool:
         final_tools.append(deferred_setup.tool_search_tool)
+    # 然后返回最终的工具列表 和 延迟工具的setup
+    # 最终延迟工具保存在DeferredCatalog中，catalog对象被tool_search工具持有，在每次search的时候使用
     return final_tools, deferred_setup
 
 

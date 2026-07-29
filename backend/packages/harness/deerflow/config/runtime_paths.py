@@ -24,13 +24,16 @@ def runtime_home() -> Path:
     """Return the writable DeerFlow state directory."""
     if env_home := os.getenv("DEER_FLOW_HOME"):
         return Path(env_home).resolve()
+    # 使用${project_root}/.deer-flow作为运行时的home目录
     return project_root() / ".deer-flow"
 
 
 def resolve_path(value: str | os.PathLike[str], *, base: Path | None = None) -> Path:
     """Resolve absolute paths as-is and relative paths against the project root."""
     path = Path(value)
+    # 如果path不是绝对路径的话
     if not path.is_absolute():
+        # 在前面加上base 或者 {project_root}路径
         path = (base or project_root()) / path
     return path.resolve()
 

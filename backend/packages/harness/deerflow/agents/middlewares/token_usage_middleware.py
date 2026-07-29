@@ -295,6 +295,7 @@ class TokenUsageMiddleware(AgentMiddleware):
             idx = len(messages) - 2
             while idx >= 0:
                 tool_msg = messages[idx]
+                # 如果当前消息不是ToolMessage或者没有tool_call_id，直接跳出循环
                 if not isinstance(tool_msg, ToolMessage) or not tool_msg.tool_call_id:
                     break
 
@@ -308,10 +309,12 @@ class TokenUsageMiddleware(AgentMiddleware):
                     dispatch_idx = idx - 1
                     while dispatch_idx >= 0:
                         candidate = messages[dispatch_idx]
+                        # 如果发现消息是AIMessage且存在id为tool_call_id的tool_call，说明是派发subagent的那条AIMessage
                         if isinstance(candidate, AIMessage) and _has_tool_call(candidate, tool_msg.tool_call_id):
                             # Accumulate into an existing update for the same
                             # AIMessage (multiple task calls in one response),
                             # or merge fresh from the original message.
+                            # 尝试获取对应的需要更新的消息，可能已经存在了，因为会出现派发了多个subagent的情况，之前的ToolMessage已经将它初始化了
                             existing_update = state_updates.get(dispatch_idx)
                             # 拿到AIMessage的usage_metadata，将subagent的usage累加进去
                             prev = existing_update.usage_metadata if existing_update else (getattr(candidate, "usage_metadata", None) or {})
@@ -323,13 +326,14 @@ class TokenUsageMiddleware(AgentMiddleware):
                             }
                             state_updates[dispatch_idx] = candidate.model_copy(update={"usage_metadata": merged})
                             break
+                        # 如果当前消息不是派发subagent的AIMessage，继续向前找
                         dispatch_idx -= 1
                 # 继续往回找调用task工具的ToolMessage
                 idx -= 1
 
         # 拿到最后一个消息
         last = messages[-1]
-        # 如何不是AIMessage的话，判断下有没有subagent的usage的设置，如果有，返回更新后的AIMessage。
+        # 如何不是AIMessage的话，判断下是否存在需要更新状态的AIMessage列表(整合了subagent usage metadata的)，有的话，返回这些需要更新的AIMessage
         # 否则直接返回None
         if not isinstance(last, AIMessage):
             if state_updates:
@@ -358,18 +362,19 @@ class TokenUsageMiddleware(AgentMiddleware):
 
         todos = state.get("todos") or []
         # 根据最后一个AIMessage和todos来构建该消息的归属类型，用于前端展示
-        # ！！这个方法是重点
+        # todo ！！这个方法是重点
         attribution = _build_attribution(last, todos if isinstance(todos, list) else [])
+        # 获取最后一个消息的additional_kwargs属性
         additional_kwargs = dict(getattr(last, "additional_kwargs", {}) or {})
 
-        # 如果已经AIMessage的additional_kwargs已经存在归属类型了，直接返回前面的结果
+        # 如果已经AIMessage的additional_kwargs已经存在归属类型，且与本次算出的归属类型一致，直接返回需要更新的AIMessage列表
         if additional_kwargs.get(TOKEN_USAGE_ATTRIBUTION_KEY) == attribution:
             return {"messages": [state_updates[idx] for idx in sorted(state_updates)]} if state_updates else None
 
-        # 如果还没有设置归属类型，设置进去
+        # 如果还没有设置归属类型，设置进去，并且更新最后一个AIMessage的additional_kwargs属性
         additional_kwargs[TOKEN_USAGE_ATTRIBUTION_KEY] = attribution
         updated_msg = last.model_copy(update={"additional_kwargs": additional_kwargs})
-        # 并且将最后一个消息也放入状态更新列表，用于返回
+        # 将最后一个消息也放入状态更新列表，用于返回
         state_updates[len(messages) - 1] = updated_msg
         return {"messages": [state_updates[idx] for idx in sorted(state_updates)]}
 
