@@ -1,0 +1,58 @@
+backend/packages/harness/deerflow/runtime/journal.py
+  h_80ca37e46d63b9 115,117,120,123,125,128,131,135,139,141,148,152
+backend/packages/harness/deerflow/runtime/events/store/memory.py
+  h_80ca37e46d63b9 16,18,38,40,51,78,80,108,110,112,117-122,126
+backend/packages/harness/deerflow/config/runtime_paths.py
+  h_80ca37e46d63b9 27,34,36
+backend/packages/harness/deerflow/skills/storage/__init__.py
+  h_80ca37e46d63b9 33,36-37,39,41,43,48,54,60,63,70,74,76
+backend/packages/harness/deerflow/tracing/factory.py
+  h_80ca37e46d63b9 15,35,37,39,43,47,49,52,56
+backend/packages/harness/deerflow/tools/builtins/tool_search.py
+  h_80ca37e46d63b9 147,149,153,157,164,178,182,184,188,190,205,207,211,214-215
+backend/app/gateway/pagination.py
+  h_80ca37e46d63b9 8-9,11,14,17
+backend/packages/harness/deerflow/runtime/events/store/db.py
+  h_80ca37e46d63b9 32,34,45,48,57,69,74,76,78,81,157,159,164,168,172,175,179,181,194,262,268,276,282,288
+backend/packages/harness/deerflow/agents/lead_agent/agent.py
+  h_80ca37e46d63b9 55,58,61,67,69,71,75,79,507,513,521,523,525,535,539,547,550,552,555,559-560,563,566,569,574,587,591,611-612,614,621,647,649,651-652
+backend/packages/harness/deerflow/skills/storage/local_skill_storage.py
+  h_80ca37e46d63b9 47
+backend/packages/harness/deerflow/skills/tool_policy.py
+  h_80ca37e46d63b9 26,28,31,37,44-45
+backend/packages/harness/deerflow/config/tracing_config.py
+  h_80ca37e46d63b9 19,37,74,112,114,117,119,122,125,127,132,140,156
+backend/packages/harness/deerflow/runtime/stream_bridge/memory.py
+  h_80ca37e46d63b9 58,62-63,68,112-114,119,128,130,134,137,140,144,148,152
+backend/packages/harness/deerflow/runtime/runs/manager.py
+  h_80ca37e46d63b9 488,490,493,496,501,506
+backend/app/gateway/routers/thread_runs.py
+  h_80ca37e46d63b9 402-404,406,414,416
+backend/packages/harness/deerflow/config/agents_config.py
+  h_80ca37e46d63b9 67,69,71-72,74,78,104,109,111,114,121,129,134
+backend/packages/harness/deerflow/tools/mcp_metadata.py
+  h_80ca37e46d63b9 29
+backend/app/gateway/services.py
+  h_80ca37e46d63b9 55,61,471,475,480,482,485,489-491
+backend/packages/harness/deerflow/config/paths.py
+  h_80ca37e46d63b9 135,139,143
+backend/packages/harness/deerflow/agents/middlewares/token_usage_middleware.py
+  h_80ca37e46d63b9 298,312,317,329,336,365,367,370,374,377
+backend/packages/harness/deerflow/config/skills_config.py
+  h_80ca37e46d63b9 45,49,53,58
+backend/app/gateway/deps.py
+  h_80ca37e46d63b9 193
+backend/packages/harness/deerflow/agents/lead_agent/prompt.py
+  h_80ca37e46d63b9 23,149,154
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.38-trip",
+  "base_commit_sha": "e334383b60d451dc42a66620674e141c600992e8",
+  "prompts": {},
+  "humans": {
+    "h_80ca37e46d63b9": {
+      "author": "zhengyudai <zhengyu_dai@foxmail.com>"
+    }
+  }
+}
