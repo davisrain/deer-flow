@@ -1,0 +1,40 @@
+backend/packages/harness/deerflow/sandbox/middleware.py
+  h_80ca37e46d63b9 44-45,49,51,54,73,75,79
+backend/packages/harness/deerflow/agents/middlewares/thread_data_middleware.py
+  h_80ca37e46d63b9 96-97,101,108,118
+backend/packages/harness/deerflow/sandbox/local/local_sandbox_provider.py
+  h_80ca37e46d63b9 76,103-104,106,110,121,128,130,133,136,145,155,163,172,196,198,200,209-210,231,254,258,264,266,271,277,283-284,287,291
+backend/packages/harness/deerflow/sandbox/tools.py
+  h_80ca37e46d63b9 230,297,300,305,309,311,314,319,326,329,334,512,516-517,524,545,558,647,679,683,690,697,702,709,746,749,1156,1162,1176,1181,1185,1190,1193,1667,1669,1672,1674,1676,1678,1681,1684,1688-1689,1693,1698
+backend/packages/harness/deerflow/agents/lead_agent/prompt.py
+  h_80ca37e46d63b9 197,209,211,215,218,235,237,242,244,246,252,686,759,764,770,784,789,808,812,817,827-828,830
+backend/packages/harness/deerflow/agents/middlewares/token_usage_middleware.py
+  h_80ca37e46d63b9 364
+backend/packages/harness/deerflow/sandbox/local/local_sandbox.py
+  h_80ca37e46d63b9 81,372,381
+backend/packages/harness/deerflow/reflection/resolvers.py
+  h_80ca37e46d63b9 44,50,62,69,73
+backend/packages/harness/deerflow/sandbox/sandbox_provider.py
+  h_80ca37e46d63b9 71
+backend/packages/harness/deerflow/subagents/registry.py
+  h_80ca37e46d63b9 19,140,144,146,160,163,169
+backend/packages/harness/deerflow/config/paths.py
+  h_80ca37e46d63b9 220,298,300,302,304,307
+backend/packages/harness/deerflow/sandbox/security.py
+  h_80ca37e46d63b9 28,31,42,44,47,50
+backend/packages/harness/deerflow/agents/lead_agent/agent.py
+  h_80ca37e46d63b9 657
+backend/packages/harness/deerflow/tools/tools.py
+  h_80ca37e46d63b9 67,71,75,83,92,96,98,106,116,128,153,175,179
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.39-trip",
+  "base_commit_sha": "8de3005ceaefc50ae4b51b3fef8372d55aafda50",
+  "prompts": {},
+  "humans": {
+    "h_80ca37e46d63b9": {
+      "author": "zhengyudai <zhengyu_dai@foxmail.com>"
+    }
+  }
+}
