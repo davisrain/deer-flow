@@ -41,11 +41,13 @@ def resolve_variable[T](
         ValueError: If the resolved variable doesn't pass the validation checks.
     """
     try:
+        # 根据:分隔出module_path和对应的变量
         module_path, variable_name = variable_path.rsplit(":", 1)
     except ValueError as err:
         raise ImportError(f"{variable_path} doesn't look like a variable path. Example: parent_package_name.sub_package_name.module_name:variable_name") from err
 
     try:
+        # 导入module
         module = import_module(module_path)
     except ImportError as err:
         module_root = module_path.split(".", 1)[0]
@@ -57,16 +59,18 @@ def resolve_variable[T](
         raise ImportError(f"Error importing module {module_path}: {err}") from err
 
     try:
+        # 获取module中的变量
         variable = getattr(module, variable_name)
     except AttributeError as err:
         raise ImportError(f"Module {module_path} does not define a {variable_name} attribute/class") from err
 
     # Type validation
     if expected_type is not None:
+        # 如果不是指定类型的，报错
         if not isinstance(variable, expected_type):
             type_name = expected_type.__name__ if isinstance(expected_type, type) else " or ".join(t.__name__ for t in expected_type)
             raise ValueError(f"{variable_path} is not an instance of {type_name}, got {type(variable).__name__}")
-
+    # 返回变量
     return variable
 
 

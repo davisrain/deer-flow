@@ -194,6 +194,7 @@ def _build_available_subagents_description(available_names: list[str], bash_avai
     from all registered roles, so the LLM knows about every available type.
     """
     # Built-in descriptions (kept for backward compatibility with existing prompt quality)
+    # 内置的subagent对应的描述
     builtin_descriptions = {
         "general-purpose": "For ANY non-trivial task - web research, code exploration, file operations, analysis, etc.",
         "bash": (
@@ -205,12 +206,16 @@ def _build_available_subagents_description(available_names: list[str], bash_avai
     from deerflow.subagents.registry import get_subagent_config
 
     lines = []
+    # 遍历subagent的name集合
     for name in available_names:
+        # 如果是内置的，获取desc添加到lines中
         if name in builtin_descriptions:
             lines.append(f"- **{name}**: {builtin_descriptions[name]}")
         else:
+            # 否则，获取subagent对应的config
             config = get_subagent_config(name, app_config=app_config)
             if config is not None:
+                # 将config中的desc拼接好之后添加到lines中
                 desc = config.description.split("\n")[0].strip()  # First line only for brevity
                 lines.append(f"- **{name}**: {desc}")
 
@@ -227,18 +232,24 @@ def _build_subagent_section(max_concurrent: int, *, app_config: AppConfig | None
         Formatted subagent section string.
     """
     n = max_concurrent
+    # 获取可用的subagent的名称，如果app_config存在的话，根据配置获取；否则使用无参方法获取
     available_names = get_available_subagent_names(app_config=app_config) if app_config is not None else get_available_subagent_names()
+    # 查看bash是否在可用的名称列表里面
     bash_available = "bash" in available_names
 
     # Dynamically build subagent type descriptions from registry (aligned with Codex's
     # agent_type_description pattern where all registered roles are listed in the tool spec).
+    # 构建subagent的描述
     available_subagents = _build_available_subagents_description(available_names, bash_available, app_config=app_config)
+    # 能使用的工具示例，根据情况剔除bash
     direct_tool_examples = "bash, ls, read_file, web_search, etc." if bash_available else "ls, read_file, web_search, etc."
+    # 直接执行的prompt示例
     direct_execution_example = (
         '# User asks: "Run the tests"\n# Thinking: Cannot decompose into parallel sub-tasks\n# → Execute directly\n\nbash("npm test")  # Direct execution, not task()'
         if bash_available
         else '# User asks: "Read the README"\n# Thinking: Single straightforward file read\n# → Execute directly\n\nread_file("/mnt/user-data/workspace/README.md")  # Direct execution, not task()'
     )
+    # 拼接subagent相关的system prompt
     return f"""<subagent_system>
 **🚀 SUBAGENT MODE ACTIVE - DECOMPOSE, DELEGATE, SYNTHESIZE**
 
@@ -672,6 +683,7 @@ def get_skills_prompt_section(available_skills: set[str] | None = None, *, app_c
     available_key = tuple(sorted(available_skills)) if available_skills is not None else None
     if not skill_signature and available_key is not None:
         return ""
+    # 构建skill自进化相关的prompt
     skill_evolution_section = _build_skill_evolution_section(skill_evolution_enabled)
     return _get_cached_skills_prompt_section(skill_signature, available_key, container_base_path, skill_evolution_section)
 
@@ -744,15 +756,18 @@ def _build_custom_mounts_section(*, app_config: AppConfig | None = None) -> str:
 
     mounts = config.sandbox.mounts or []
 
+    # 如果没有配置挂载，直接返回
     if not mounts:
         return ""
 
     lines = []
+    # 否则遍历配置，提示挂载的容器路径
     for mount in mounts:
         access = "read-only" if mount.read_only else "read-write"
         lines.append(f"- Custom mount: `{mount.container_path}` - Host directory mapped into the sandbox ({access})")
 
     mounts_list = "\n".join(lines)
+    # 提示llm可以去自定义挂载路径中去查找文件
     return f"\n**Custom Mounted Directories:**\n{mounts_list}\n- If the user needs files outside `/mnt/user-data`, use these absolute container paths directly when they match the requested directory"
 
 
@@ -766,10 +781,12 @@ def apply_prompt_template(
     deferred_names: frozenset[str] = frozenset(),
 ) -> str:
     # Include subagent section only if enabled (from runtime parameter)
+    # 当subagent启用的时候，构建subagent的prompt，并且将最大subagent的并发数也传入
     n = max_concurrent_subagents
     subagent_section = _build_subagent_section(n, app_config=app_config) if subagent_enabled else ""
 
     # Add subagent reminder to critical_reminders if enabled
+    # todo reminder、thinking guidance有什么作用
     subagent_reminder = (
         "- **Orchestrator Mode**: You are a task orchestrator - decompose complex tasks into parallel sub-tasks. "
         f"**HARD LIMIT: max {n} `task` calls per response.** "
@@ -788,13 +805,16 @@ def apply_prompt_template(
     )
 
     # Get skills section
+    # 构建skills相关的prompt
     skills_section = get_skills_prompt_section(available_skills, app_config=app_config)
 
     # Get deferred tools section (tool_search)
+    # 如果开启了tool_search，需要在system_prompt里面添加延迟工具的prompt
     deferred_tools_section = get_deferred_tools_prompt_section(deferred_names=deferred_names)
 
     # Build ACP agent section only if ACP agents are configured
     acp_section = _build_acp_section(app_config=app_config)
+    # 构建自定义的挂载 prompt
     custom_mounts_section = _build_custom_mounts_section(app_config=app_config)
     acp_and_mounts_section = "\n".join(section for section in (acp_section, custom_mounts_section) if section)
 
@@ -804,7 +824,10 @@ def apply_prompt_template(
     # identical across users and sessions for maximum prefix-cache reuse.
     return SYSTEM_PROMPT_TEMPLATE.format(
         agent_name=agent_name or "DeerFlow 2.0",
+        # 指定的custom_agent会有自己的soul
+        # todo soul又是拿来干嘛的
         soul=get_agent_soul(agent_name),
+        # custom_agent会有self_update的prompt模块，可以调用update_agent这个tool去更新自己的SOUL.md
         self_update_section=_build_self_update_section(agent_name),
         skills_section=skills_section,
         deferred_tools_section=deferred_tools_section,

@@ -361,7 +361,7 @@ class TokenUsageMiddleware(AgentMiddleware):
             )
 
         todos = state.get("todos") or []
-        # 根据最后一个AIMessage和todos来构建该消息的归属类型，用于前端展示
+        # 根据最后一个AIMessage和todos来构建该消息的token消耗的归属类型，用于前端展示
         # todo ！！这个方法是重点
         attribution = _build_attribution(last, todos if isinstance(todos, list) else [])
         # 获取最后一个消息的additional_kwargs属性

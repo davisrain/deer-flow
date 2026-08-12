@@ -227,6 +227,7 @@ def _extract_thread_id_from_thread_data(thread_data: "ThreadDataState | None") -
     ``{base_dir}/threads/{thread_id}/user-data/workspace``, so
     ``Path(workspace_path).parent.parent.name`` yields the thread_id.
     """
+    # 从workspace_path里面解析出thread_id
     if thread_data is None:
         return None
     workspace_path = thread_data.get("workspace_path")
@@ -293,34 +294,44 @@ def _resolve_acp_workspace_path(path: str, thread_id: str | None = None) -> str:
         FileNotFoundError: If ACP workspace directory does not exist.
         PermissionError: If path traversal is detected.
     """
+    # 检查path中是否有..，有的话报错
     _reject_path_traversal(path)
 
+    # 获取acp-workspace的host_path
     host_path = _get_acp_workspace_host_path(thread_id)
     if host_path is None:
         raise FileNotFoundError(f"ACP workspace directory not available for path: {path}")
 
+    # 如果传入的path等于/mnt/acp-workspace，返回对应的host_path
     if path == _ACP_WORKSPACE_VIRTUAL_PATH:
         return host_path
 
+    # 获取相对路径
     relative = path[len(_ACP_WORKSPACE_VIRTUAL_PATH) :].lstrip("/")
+    # 将相对路径拼接到acp-workspace的host_path后面得到具体的物理路径
     resolved = _join_path_preserving_style(host_path, relative)
 
+    # 这个是linux模式下的判断
     if "/" in host_path and "\\" not in host_path:
         base_path = posixpath.normpath(host_path)
         candidate_path = posixpath.normpath(resolved)
         try:
+            # 判断解析后的candidate_path是否在base_path的下面，如果不是，说明超出沙箱范围了，报错
             if posixpath.commonpath([base_path, candidate_path]) != base_path:
                 raise PermissionError("Access denied: path traversal detected")
         except ValueError:
             raise PermissionError("Access denied: path traversal detected") from None
         return resolved
 
+    # 这个是windows下的判断，以\\为分隔符的
     resolved_path = Path(resolved).resolve()
     try:
+        # 也是判断resolved是否在host_path的下面，如果不是，报错
         resolved_path.relative_to(Path(host_path).resolve())
     except ValueError:
         raise PermissionError("Access denied: path traversal detected")
 
+    # 返回解析后的路径
     return str(resolved_path)
 
 
@@ -498,15 +509,19 @@ def replace_virtual_path(path: str, thread_data: ThreadDataState | None) -> str:
     Returns:
         The path with virtual prefix replaced by actual path.
     """
+    # 如果thead_data为None的话，直接返回
     if thread_data is None:
         return path
 
+    # 获取thread_id维度的所有/mnt/user-data下目录到真实路径的映射关系
+    # todo sandbox里面已经维护了，为什么还要在这里重新计算
     mappings = _thread_virtual_to_actual_mappings(thread_data)
     if not mappings:
         return path
 
     # Longest-prefix-first replacement with segment-boundary checks.
     for virtual_base, actual_base in sorted(mappings.items(), key=lambda item: len(item[0]), reverse=True):
+        # 遍历所有路径映射，将虚拟路径映射为真实路径
         if path == virtual_base:
             return actual_base
         if path.startswith(f"{virtual_base}/"):
@@ -527,6 +542,7 @@ def _thread_virtual_to_actual_mappings(thread_data: ThreadDataState) -> dict[str
     uploads = thread_data.get("uploads_path")
     outputs = thread_data.get("outputs_path")
 
+    # 构建/mnt/user-data/下面的workspace、uploads、outputs到实际host_path的映射
     if workspace:
         mappings[f"{VIRTUAL_PATH_PREFIX}/workspace"] = workspace
     if uploads:
@@ -539,6 +555,7 @@ def _thread_virtual_to_actual_mappings(thread_data: ThreadDataState) -> dict[str
     if actual_dirs:
         common_parent = str(Path(actual_dirs[0]).parent)
         if all(str(path.parent) == common_parent for path in actual_dirs):
+            # 将/mnt/user-data到host_path的映射也存入
             mappings[VIRTUAL_PATH_PREFIX] = common_parent
 
     return mappings
@@ -627,6 +644,7 @@ def _reject_path_traversal(path: str) -> None:
     """Reject paths that contain '..' segments to prevent directory traversal."""
     # Normalise to forward slashes, then check for '..' segments.
     normalised = path.replace("\\", "/")
+    # 检测path里面是否有..，如果存在，报错，不允许path traversal
     for segment in normalised.split("/"):
         if segment == "..":
             raise PermissionError("Access denied: path traversal detected")
@@ -658,31 +676,37 @@ def validate_local_tool_path(path: str, thread_data: ThreadDataState | None, *, 
     if thread_data is None:
         raise SandboxRuntimeError("Thread data not available for local sandbox")
 
+    # 检验这个路径中是否存在..，如果存在，报错
     _reject_path_traversal(path)
 
     # Skills paths — read-only access only
+    # 如果是skills的目录，但read_only为false，报错
     if _is_skills_path(path):
         if not read_only:
             raise PermissionError(f"Write access to skills path is not allowed: {path}")
         return
 
     # ACP workspace paths — read-only access only
+    # 是acp-workspace的目录，read_only为false，报错
     if _is_acp_workspace_path(path):
         if not read_only:
             raise PermissionError(f"Write access to ACP workspace is not allowed: {path}")
         return
 
     # User-data paths
+    # 如果是user-data的目录，直接返回
     if path.startswith(f"{VIRTUAL_PATH_PREFIX}/"):
         return
 
     # Custom mount paths — respect read_only config
+    # 如果是自定义的挂载目录，检验read_only标识和配置的read_only是否一致，不一致报错
     if _is_custom_mount_path(path):
         mount = _get_custom_mount_for_path(path)
         if mount and mount.read_only and not read_only:
             raise PermissionError(f"Write access to read-only mount is not allowed: {path}")
         return
 
+    # 其他路径报错
     raise PermissionError(f"Only paths under {VIRTUAL_PATH_PREFIX}/, {_get_skills_container_path()}/, {_ACP_WORKSPACE_VIRTUAL_PATH}/, or configured mount paths are allowed")
 
 
@@ -719,8 +743,10 @@ def _resolve_and_validate_user_data_path(path: str, thread_data: ThreadDataState
 
     Returns the resolved host path string.
     """
+    # 将path从/mnt/user-data这种虚拟路径替换为真实路径
     resolved_str = replace_virtual_path(path, thread_data)
     resolved = Path(resolved_str).resolve()
+    # 校验这些路径是否是thread_data维护的路径下的，如果不是，需要报错
     _validate_resolved_user_data_path(resolved, thread_data)
     return str(resolved)
 
@@ -1127,11 +1153,13 @@ def ensure_sandbox_initialized(runtime: Runtime | None = None) -> Sandbox:
         raise SandboxRuntimeError("Tool runtime state not available")
 
     # Check if sandbox already exists in state
+    # 检查sandbox_id是否在state里面，以及对应的sandbox是否被实例化了
     sandbox_state = runtime.state.get("sandbox")
     if sandbox_state is not None:
         sandbox_id = sandbox_state.get("sandbox_id")
         if sandbox_id is not None:
             sandbox = get_sandbox_provider().get(sandbox_id)
+            # 如果id存在，但sandbox不存在，说明被释放了，重新acquire一个
             if sandbox is not None:
                 if runtime.context is not None:
                     runtime.context["sandbox_id"] = sandbox_id  # Ensure sandbox_id is in context for releasing in after_agent
@@ -1145,19 +1173,24 @@ def ensure_sandbox_initialized(runtime: Runtime | None = None) -> Sandbox:
     if thread_id is None:
         raise SandboxRuntimeError("Thread ID not available in runtime context")
 
+    # 根据thread_id获取sandbox
     provider = get_sandbox_provider()
     sandbox_id = provider.acquire(thread_id)
 
     # Update runtime state - this persists across tool calls
+    # 然后将sandbox_id存入state中
     runtime.state["sandbox"] = {"sandbox_id": sandbox_id}
 
     # Retrieve and return the sandbox
+    # 获取sandbox
     sandbox = provider.get(sandbox_id)
     if sandbox is None:
         raise SandboxNotFoundError("Sandbox not found after acquisition", sandbox_id=sandbox_id)
 
+    # 将sanbox_id存入context中
     if runtime.context is not None:
         runtime.context["sandbox_id"] = sandbox_id  # Ensure sandbox_id is in context for releasing in after_agent
+    # 返回sandbox
     return sandbox
 
 
@@ -1631,27 +1664,38 @@ def read_file_tool(
         end_line: Optional ending line number (1-indexed, inclusive). Use with start_line to read a specific range.
     """
     try:
+        # 检查sandbox是不是已经初始化了，因为默认是lazy_init的，在第一次tool调用的时候才会初始化。获取对应的sandbox
         sandbox = ensure_sandbox_initialized(runtime)
+        # 确认一下thread对应的目录已经创建了。即user-data、acp-workspace目录
         ensure_thread_directories_exist(runtime)
         requested_path = path
+        # 如果是local类型的sandbox，根据sandbox_id是否带有local前缀来判断的
         if is_local_sandbox(runtime):
+            # 获取state中的thread_data属性，这个在ThreadDataMiddleware里面初始化好的
             thread_data = get_thread_data(runtime)
+            # 验证一下这个path是否存在..这种目录，以及read_only标识是否合法
             validate_local_tool_path(path, thread_data, read_only=True)
+            # 如果是skills的路径，根据PathMapping解析出host_path
             if _is_skills_path(path):
                 path = _resolve_skills_path(path)
+            # 同理，解析出acp-workspace和custom对应的host_path
             elif _is_acp_workspace_path(path):
                 path = _resolve_acp_workspace_path(path, _extract_thread_id_from_thread_data(thread_data))
+            # 如果不是custom的mount，说明是/mnt/user-data路径，解析出对应的host_path
             elif not _is_custom_mount_path(path):
                 path = _resolve_and_validate_user_data_path(path, thread_data)
             # Custom mount paths are resolved by LocalSandbox._resolve_path()
+            # custom的mount由sandbox去解析
+        # 读取文件内容
         content = sandbox.read_file(path)
         if not content:
             return "(empty)"
+        # 如果传入了前后行数，只截取对应内容
         if start_line is not None and end_line is not None:
             content = "\n".join(content.splitlines()[start_line - 1 : end_line])
         try:
             from deerflow.config.app_config import get_app_config
-
+            # 获取读文件的最大字符数配置，对文件内容进行截断
             sandbox_cfg = get_app_config().sandbox
             max_chars = sandbox_cfg.read_file_output_max_chars if sandbox_cfg else 50000
         except Exception:

@@ -68,6 +68,7 @@ def get_sandbox_provider(**kwargs) -> SandboxProvider:
     """
     global _default_sandbox_provider
     if _default_sandbox_provider is None:
+        # 根据配置文件中sandbox模块配置的use，解析出对应的sandbox provider，默认是local
         config = get_app_config()
         cls = resolve_class(config.sandbox.use, SandboxProvider)
         _default_sandbox_provider = cls(**kwargs)

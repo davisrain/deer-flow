@@ -217,6 +217,7 @@ class Paths:
         Host: `{base_dir}/threads/{thread_id}/user-data/workspace/`
         Sandbox: `/mnt/user-data/workspace/`
         """
+        # {project_root}/.deer-flow/users/{user_id}/threads/{thread_id}/user-data/workspace
         return self.thread_dir(thread_id, user_id=user_id) / "user-data" / "workspace"
 
     def sandbox_uploads_dir(self, thread_id: str, *, user_id: str | None = None) -> Path:
@@ -294,11 +295,16 @@ class Paths:
         ACP agent invocation.
         """
         for d in [
+            # {project_root}/.deer-flow/users/{user_id}/threads/{thread_id}/user-data/workspace
             self.sandbox_work_dir(thread_id, user_id=user_id),
+            # {project_root}/.deer-flow/users/{user_id}/threads/{thread_id}/user-data/uploads
             self.sandbox_uploads_dir(thread_id, user_id=user_id),
+            # {project_root}/.deer-flow/users/{user_id}/threads/{thread_id}/user-data/outputs
             self.sandbox_outputs_dir(thread_id, user_id=user_id),
+            # {project_root}/.deer-flow/users/{user_id}/threads/{thread_id}/acp-workspace
             self.acp_workspace_dir(thread_id, user_id=user_id),
         ]:
+            # 创建上面这些目录，并且将权限设置为777
             d.mkdir(parents=True, exist_ok=True)
             d.chmod(0o777)
 

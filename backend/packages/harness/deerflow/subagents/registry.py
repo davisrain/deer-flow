@@ -16,6 +16,7 @@ def _resolve_subagents_app_config(app_config: Any | None = None):
         from deerflow.config.subagents_config import get_subagents_app_config
 
         return get_subagents_app_config()
+    # 获取subagent模块的内容
     return getattr(app_config, "subagents", app_config)
 
 
@@ -136,10 +137,13 @@ def get_subagent_names(*, app_config: Any | None = None) -> list[str]:
     Returns:
         List of subagent names.
     """
+    # 获取内置的subagent名称，general-purpose和bash
     names = list(BUILTIN_SUBAGENTS.keys())
 
     # Merge custom_agents from config.yaml
+    # 尝试去配置文件中查找subagent的名称，从配置文件中获取subagent的配置
     subagents_config = _resolve_subagents_app_config(app_config)
+    # 遍历subagent下的custom_agents的配置，将名称收集起来
     for custom_name in subagents_config.custom_agents:
         if custom_name not in names:
             names.append(custom_name)
@@ -153,13 +157,16 @@ def get_available_subagent_names(*, app_config: Any | None = None) -> list[str]:
     Returns:
         List of subagent names visible to the current sandbox configuration.
     """
+    # 获取subagent的名称，里面包括内置的，还有在config.yaml的subagents模块自定义配置的
     names = get_subagent_names(app_config=app_config)
     try:
+        # 查看配置文件中sandbox模块的配置，判断是否允许bash命令
         host_bash_allowed = is_host_bash_allowed(app_config) if hasattr(app_config, "sandbox") else is_host_bash_allowed()
     except Exception:
         logger.debug("Could not determine host bash availability; exposing all subagents")
         return names
 
+    # 如果不允许bash命令的话，将name=bash的subagent名称剔除
     if not host_bash_allowed:
         names = [name for name in names if name != "bash"]
     return names

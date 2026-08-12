@@ -73,6 +73,7 @@ class LocalSandboxProvider(SandboxProvider):
                 the LRU cache. When exceeded, the least-recently-used entry is
                 evicted on the next ``acquire``.
         """
+        # 初始化路径映射
         self._path_mappings = self._setup_path_mappings()
         self._generic_sandbox: LocalSandbox | None = None
         self._thread_sandboxes: OrderedDict[str, LocalSandbox] = OrderedDict()
@@ -99,10 +100,14 @@ class LocalSandboxProvider(SandboxProvider):
             from deerflow.config import get_app_config
 
             config = get_app_config()
+            # 映射skills的路径
+            # 默认是DEER_FLOW_SKILL_PATH指定的路径 -> DEER_FLOW_PROJECT_ROOT/skills -> 当前代码仓库deer-flow/skills
             skills_path = config.skills.get_skills_path()
+            # 默认是/mnt/skills
             container_path = config.skills.container_path
 
             # Only add mapping if skills directory exists
+            # 构建映射关系
             if skills_path.exists():
                 mappings.append(
                     PathMapping(
@@ -113,17 +118,22 @@ class LocalSandboxProvider(SandboxProvider):
                 )
 
             # Map custom mounts from sandbox config
+            # 将/mnt/acp-workspace /mnt/user-data /mnt/skills组成被解析过的容器路径前缀集合
             _RESERVED_CONTAINER_PREFIXES = [
                 container_path,
                 _ACP_WORKSPACE_VIRTUAL_PREFIX,
                 _USER_DATA_VIRTUAL_PREFIX,
             ]
             sandbox_config = config.sandbox
+            # 获取配置文件的sandbox配置模块中的mounts配置
             if sandbox_config and sandbox_config.mounts:
+                # 遍历并解析它们，生成对应的PathMapping
                 for mount in sandbox_config.mounts:
                     host_path = Path(mount.host_path)
+                    # 移除container_path右侧的/
                     container_path = mount.container_path.rstrip("/") or "/"
 
+                    # 如果host_path不是绝对路径，跳过
                     if not host_path.is_absolute():
                         logger.warning(
                             "Mount host_path must be absolute, skipping: %s -> %s",
@@ -132,6 +142,7 @@ class LocalSandboxProvider(SandboxProvider):
                         )
                         continue
 
+                    # 如果container_path不是绝对路径，跳过
                     if not container_path.startswith("/"):
                         logger.warning(
                             "Mount container_path must be absolute, skipping: %s -> %s",
@@ -141,6 +152,7 @@ class LocalSandboxProvider(SandboxProvider):
                         continue
 
                     # Reject mounts that conflict with reserved container paths
+                    # 如果任何自定义的容器路径挂载 与 内置的路径冲突，跳过
                     if any(container_path == p or container_path.startswith(p + "/") for p in _RESERVED_CONTAINER_PREFIXES):
                         logger.warning(
                             "Mount container_path conflicts with reserved prefix, skipping: %s",
@@ -148,6 +160,7 @@ class LocalSandboxProvider(SandboxProvider):
                         )
                         continue
                     # Ensure the host path exists before adding mapping
+                    # 如果host_path是存在的，添加映射关系
                     if host_path.exists():
                         mappings.append(
                             PathMapping(
@@ -156,6 +169,7 @@ class LocalSandboxProvider(SandboxProvider):
                                 read_only=mount.read_only,
                             )
                         )
+                    # 如果host_path路径不存在，打印日志，并跳过
                     else:
                         logger.warning(
                             "Mount host_path does not exist, skipping: %s -> %s",
@@ -179,8 +193,11 @@ class LocalSandboxProvider(SandboxProvider):
         from deerflow.config.paths import get_paths
         from deerflow.runtime.user_context import get_effective_user_id
 
+        # 获取项目级别的Paths对象
         paths = get_paths()
+        # 获取当前的user_id
         user_id = get_effective_user_id()
+        # 将thread_id和user_id对应的user-data和acp-workspace的host_path创建好
         paths.ensure_thread_dirs(thread_id, user_id=user_id)
 
         return [
@@ -189,6 +206,8 @@ class LocalSandboxProvider(SandboxProvider):
             # parent directory is real and contains the three subdirs). Longer
             # subpath mappings below still win for ``/mnt/user-data/workspace/...``
             # because ``_find_path_mapping`` sorts by container_path length.
+
+            # 维护/mnt/user-data 到 {project_root}/.deer-flow/users/{user_id}/threads/{thread_id}/user-data的映射
             PathMapping(
                 container_path=_USER_DATA_VIRTUAL_PREFIX,
                 local_path=str(paths.sandbox_user_data_dir(thread_id, user_id=user_id)),
@@ -209,6 +228,7 @@ class LocalSandboxProvider(SandboxProvider):
                 local_path=str(paths.sandbox_outputs_dir(thread_id, user_id=user_id)),
                 read_only=False,
             ),
+            # 维护/mnt/acp-workspace 到 {project_root}/.deer-flow/users/{user_id}/threads/{thread_id}/acp-workspace的映射
             PathMapping(
                 container_path=_ACP_WORKSPACE_VIRTUAL_PREFIX,
                 local_path=str(paths.acp_workspace_dir(thread_id, user_id=user_id)),
@@ -231,34 +251,44 @@ class LocalSandboxProvider(SandboxProvider):
         """
         global _singleton
 
+        # 如果没有传入thread_id的情况
         if thread_id is None:
             with self._lock:
                 if self._generic_sandbox is None:
+                    # 实例化一个LocalSandbox，设置到_generic_sandbox属性中
                     self._generic_sandbox = LocalSandbox("local", path_mappings=list(self._path_mappings))
                     _singleton = self._generic_sandbox
                 return self._generic_sandbox.id
 
         # Fast path under lock.
+        # 如果传入了thread_id
         with self._lock:
+            # 根据thread_id去获取对应的sandbox
             cached = self._thread_sandboxes.get(thread_id)
             if cached is not None:
                 # Mark as most-recently used so frequently-touched threads
                 # survive eviction.
+                # 获取到了之后将其放入到lru最近的位置
                 self._thread_sandboxes.move_to_end(thread_id)
                 return cached.id
 
         # ``_build_thread_path_mappings`` touches the filesystem
         # (``ensure_thread_dirs``); release the lock during I/O.
+        # 如果在缓存中没有拿到，需要创建。这个时候整合通用的路径映射 和 当前thread的路径映射
         new_mappings = list(self._path_mappings) + self._build_thread_path_mappings(thread_id)
 
         with self._lock:
             # Re-check after the lock-free I/O: another caller may have
             # populated the cache while we were computing mappings.
+
+            # 这里double check一下
             cached = self._thread_sandboxes.get(thread_id)
             if cached is None:
+                # 传入路径映射关系，初始化LocalSandbox
                 cached = LocalSandbox(f"local:{thread_id}", path_mappings=new_mappings)
                 self._thread_sandboxes[thread_id] = cached
                 self._evict_until_within_cap_locked()
+            # 如果已经被别的线程创建好了，调整缓存的位置
             else:
                 self._thread_sandboxes.move_to_end(thread_id)
             return cached.id

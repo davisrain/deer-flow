@@ -93,15 +93,19 @@ class ThreadDataMiddleware(AgentMiddleware[ThreadDataMiddlewareState]):
 
         if self._lazy_init:
             # Lazy initialization: only compute paths, don't create directories
+            # 如果lazy_init的，只返回thread_id和user_id 对应的workspace uploads outputs目录
+            # 真正创建在acquire sandbox的时候，才会根据thread_id user_id来创建，而sandbox的acquire也会被延迟到第一次tool调用的时候
             paths = self._get_thread_paths(thread_id, user_id=user_id)
         else:
             # Eager initialization: create directories immediately
+            # 如果不是lazy_init的，即时创建这些目录
             paths = self._create_thread_directories(thread_id, user_id=user_id)
             logger.debug("Created thread data directories for thread %s", thread_id)
 
         messages = list(state.get("messages", []))
         last_message = messages[-1] if messages else None
 
+        # 如果最后一个消息是HumanMessage，给它添加一些附加属性，比如run_id
         if last_message and isinstance(last_message, HumanMessage):
             messages[-1] = HumanMessage(
                 content=last_message.content,
@@ -111,6 +115,7 @@ class ThreadDataMiddleware(AgentMiddleware[ThreadDataMiddlewareState]):
             )
 
         return {
+            # 将thread_data的目录放入state
             "thread_data": {
                 **paths,
             },

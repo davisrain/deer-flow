@@ -654,6 +654,7 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
     return create_agent(
         model=create_chat_model(name=model_name, thinking_enabled=thinking_enabled, reasoning_effort=reasoning_effort, app_config=resolved_app_config, attach_tracing=False),
         tools=final_tools,
+        # 构建langgraph需要的middlewares链
         middleware=build_middlewares(config, model_name=model_name, agent_name=agent_name, app_config=resolved_app_config, deferred_setup=setup),
         system_prompt=apply_prompt_template(
             subagent_enabled=subagent_enabled,

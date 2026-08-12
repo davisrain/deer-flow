@@ -64,12 +64,15 @@ def get_available_tools(
         List of available tools.
     """
     config = app_config or get_app_config()
+    # 获取配置文件中tools模块的工具配置，如果传入了custom_agent指定的group，先通过group过滤一遍
     tool_configs = [tool for tool in config.tools if groups is None or tool.group in groups]
 
     # Do not expose host bash by default when LocalSandboxProvider is active.
+    # 根据配置判断是否可以执行bash命令，如果不能，在tool集合中将bash tool排除了
     if not is_host_bash_allowed(config):
         tool_configs = [tool for tool in tool_configs if not _is_host_bash_tool(tool)]
 
+    # 将tool配置转换成实际的tool工具对象
     loaded_tools_raw = [(cfg, resolve_variable(cfg.use, BaseTool)) for cfg in tool_configs]
 
     # Warn when the config ``name`` field and the tool object's ``.name``
@@ -77,6 +80,7 @@ def get_available_tools(
     # the LLM receives one name in its tool schema but the runtime router
     # recognises a different name, producing "not a valid tool" errors.
     for cfg, loaded in loaded_tools_raw:
+        # 如果工具名称和配置名称不匹配，打印日志告警
         if cfg.name != loaded.name:
             logger.warning(
                 "Tool name mismatch: config name %r does not match tool .name %r (use: %s). The tool's own .name will be used for binding.",
@@ -85,10 +89,13 @@ def get_available_tools(
                 cfg.use,
             )
 
+    # 确保tool能够被同步调用
     loaded_tools = [_ensure_sync_invocable_tool(t) for _, t in loaded_tools_raw]
 
     # Conditionally add tools based on config
+    # 获取内置的工具：present_file和ask_clarification
     builtin_tools = BUILTIN_TOOLS.copy()
+    # 如果skill配置了自进化，添加skill_manage_tool
     skill_evolution_config = getattr(config, "skill_evolution", None)
     if getattr(skill_evolution_config, "enabled", False):
         from deerflow.tools.skill_manage_tool import skill_manage_tool
@@ -96,6 +103,7 @@ def get_available_tools(
         builtin_tools.append(skill_manage_tool)
 
     # Add subagent tools only if enabled via runtime parameter
+    # 如果开启了subagent，添加task_tool，用于派发subagent
     if subagent_enabled:
         builtin_tools.extend(SUBAGENT_TOOLS)
         logger.info("Including subagent tools (task)")
@@ -105,6 +113,7 @@ def get_available_tools(
         model_name = config.models[0].name
 
     # Add view_image_tool only if the model supports vision
+    # 如果模型支持视觉，添加view_image_tool
     model_config = config.get_model_config(model_name) if model_name else None
     if model_config is not None and model_config.supports_vision:
         builtin_tools.append(view_image_tool)
@@ -116,6 +125,7 @@ def get_available_tools(
     # made through the Gateway API (which runs in a separate process) are immediately
     # reflected when loading MCP tools.
     mcp_tools = []
+    # 调用mcp获取mcp的tools
     if include_mcp:
         try:
             from deerflow.config.extensions_config import ExtensionsConfig
@@ -140,6 +150,7 @@ def get_available_tools(
             logger.error(f"Failed to get cached MCP tools: {e}")
 
     # Add invoke_acp_agent tool if any ACP agents are configured
+    # 调用agent context protocol获取其他agent的tools
     acp_tools: list[BaseTool] = []
     try:
         from deerflow.tools.builtins.invoke_acp_agent_tool import build_invoke_acp_agent_tool
@@ -161,9 +172,11 @@ def get_available_tools(
     # Deduplicate by tool name — config-loaded tools take priority, followed by
     # built-ins, MCP tools, and ACP tools.  Duplicate names cause the LLM to
     # receive ambiguous or concatenated function schemas (issue #1803).
+    # 最终整合配置文件的tools + 内置的tools + mcp的tools + acp的tools
     all_tools = [_ensure_sync_invocable_tool(t) for t in loaded_tools + builtin_tools + mcp_tools + acp_tools]
     seen_names: set[str] = set()
     unique_tools: list[BaseTool] = []
+    # 根据tool_name去重之后返回
     for t in all_tools:
         if t.name not in seen_names:
             unique_tools.append(t)

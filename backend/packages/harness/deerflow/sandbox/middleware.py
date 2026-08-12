@@ -41,12 +41,17 @@ class SandboxMiddleware(AgentMiddleware[SandboxMiddlewareState]):
                       Default is True for optimal performance.
         """
         super().__init__()
+        # 如果lazy_init是true的话，将sandbox的获取延迟到第一个工具调用的时候，默认是true
+        # 否则，在before_agent里面就获取对应的sandbox
         self._lazy_init = lazy_init
 
     def _acquire_sandbox(self, thread_id: str) -> str:
+        # 获取sandbox provider，默认LocalSandboxProvider
         provider = get_sandbox_provider()
+        # 调用provider的acquire方法获取sandbox
         sandbox_id = provider.acquire(thread_id)
         logger.info(f"Acquiring sandbox {sandbox_id}")
+        # 返回sandbox_id
         return sandbox_id
 
     async def _acquire_sandbox_async(self, thread_id: str) -> str:
@@ -65,11 +70,13 @@ class SandboxMiddleware(AgentMiddleware[SandboxMiddlewareState]):
             return super().before_agent(state, runtime)
 
         # Eager initialization (original behavior)
+        # 如果agent_state里面没有sandbox属性
         if "sandbox" not in state or state["sandbox"] is None:
+            # 从上下文中获取thread_id
             thread_id = (runtime.context or {}).get("thread_id")
             if thread_id is None:
                 return super().before_agent(state, runtime)
-            # 根据thread_id获取sandbox_id
+            # 根据thread_id构建sandbox，返回sandbox_id
             sandbox_id = self._acquire_sandbox(thread_id)
             logger.info(f"Assigned sandbox {sandbox_id} to thread {thread_id}")
             # 向state中写入sandbox属性

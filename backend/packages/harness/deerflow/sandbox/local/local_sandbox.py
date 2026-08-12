@@ -78,6 +78,7 @@ class LocalSandbox(Sandbox):
                           Skills directory is read-only by default.
         """
         super().__init__(id)
+        # 将路径映射保存到实例变量里面
         self.path_mappings = path_mappings or []
         # Track files written through write_file so read_file only
         # reverse-resolves paths in agent-authored content.
@@ -368,6 +369,7 @@ class LocalSandbox(Sandbox):
         return result
 
     def read_file(self, path: str) -> str:
+        # 根据path_mappings解析对应的虚拟路径为真实路径
         resolved_path = self._resolve_path(path)
         try:
             with open(resolved_path, encoding="utf-8") as f:
@@ -376,6 +378,7 @@ class LocalSandbox(Sandbox):
             # by write_file (agent-authored content). User-uploaded files,
             # external tool output, and other non-agent content should not be
             # silently rewritten — see discussion on PR #1935.
+            # 如果这个路径是被agent写过的，那么内容中可能会出现真实路径，需要将其转换回虚拟路径
             if resolved_path in self._agent_written_paths:
                 content = self._reverse_resolve_paths_in_output(content)
             return content
