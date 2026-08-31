@@ -1,0 +1,34 @@
+backend/packages/harness/deerflow/agents/memory/queue.py
+  h_80ca37e46d63b9 73,75,79,89,131,133,138,141,151,158,166,170-172,178,186,188-189,195,199-200,204,209,211,214,218,235,240
+backend/packages/harness/deerflow/tools/builtins/task_tool.py
+  h_80ca37e46d63b9 229,231,233-235,239,241,245,257,260,268,270,278,280,286,288-289,293,302,307-308,312,318,321,325,335,338,343,351,356
+backend/packages/harness/deerflow/models/factory.py
+  h_80ca37e46d63b9 104,106,109,111,114
+backend/packages/harness/deerflow/agents/memory/message_processing.py
+  h_80ca37e46d63b9 60,64,66,69,71,77,84,87,89,100,103,105,107,111,117,120,122,124
+backend/packages/harness/deerflow/subagents/executor.py
+  h_80ca37e46d63b9 157,159,162,165,209,211,215,217,219,221,229,231-232,234,237,239,244,256,258,260,284,290,332-334,338,346,385,393,395,398,405,411,470,472,527,532,548,810,819,823,828,830,832,834,840-841,848,865
+backend/packages/harness/deerflow/agents/memory/storage.py
+  h_80ca37e46d63b9 86,88,91,93,95,98-99,102,107,110,112,119,124,138,140,144,149,151,153,157,160,187,192,195,197,200,204,210,226,230,232,236,238,242,246,248,252,258,266
+backend/packages/harness/deerflow/agents/memory/updater.py
+  h_80ca37e46d63b9 53,206,209,219,221,224,226,229,232,234,247,255,259,261,264,278,282,288,304,308,310,318,326,342,348,352,380,390,420,423,433,435,442,444,452,465,469,471,473,477,482,499,503,505,507,555-556,564,569,571,573,624,627,642,673,676,684,695,701,703,705,708,710,715,720,729,731,736,738,743,746
+backend/packages/harness/deerflow/config/paths.py
+  h_80ca37e46d63b9 176,181
+backend/packages/harness/deerflow/agents/middlewares/memory_middleware.py
+  h_80ca37e46d63b9 64,69,71,75,81,93,101,103,110,112
+backend/packages/harness/deerflow/subagents/config.py
+  h_80ca37e46d63b9 46,50,58
+backend/packages/harness/deerflow/subagents/registry.py
+  h_80ca37e46d63b9 67-68,70,73,82-84,86,88,94,99,105,115,117,123,129
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.43-trip",
+  "base_commit_sha": "32c85172b8f68776e5c56c209cb1a8d8de45f812",
+  "prompts": {},
+  "humans": {
+    "h_80ca37e46d63b9": {
+      "author": "zhengyudai <zhengyu_dai@foxmail.com>"
+    }
+  }
+}
