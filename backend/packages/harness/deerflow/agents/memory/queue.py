@@ -70,10 +70,13 @@ class MemoryUpdateQueue:
             correction_detected: Whether recent turns include an explicit correction signal.
             reinforcement_detected: Whether recent turns include a positive reinforcement signal.
         """
+        # 查看memory模块的配置
         config = get_memory_config()
+        # 如果没有开启，直接返回，不做任何操作
         if not config.enabled:
             return
 
+        # 加锁，实际入队
         with self._lock:
             self._enqueue_locked(
                 thread_id=thread_id,
@@ -83,6 +86,7 @@ class MemoryUpdateQueue:
                 correction_detected=correction_detected,
                 reinforcement_detected=reinforcement_detected,
             )
+            # 重置计时器
             self._reset_timer()
 
         logger.info("Memory update queued for thread %s, queue size: %d", thread_id, len(self._queue))
@@ -124,13 +128,17 @@ class MemoryUpdateQueue:
         correction_detected: bool,
         reinforcement_detected: bool,
     ) -> None:
+        # 将thread_id user_id agent_name组成一个队列key
         queue_key = self._queue_key(thread_id, user_id, agent_name)
+        # 查找队列中是否已经存在了相同key的context
         existing_context = next(
             (context for context in self._queue if self._queue_key(context.thread_id, context.user_id, context.agent_name) == queue_key),
             None,
         )
+        # 将纠正 肯定的检测结果 和 队列中已经存在的context中的属性 做整合
         merged_correction_detected = correction_detected or (existing_context.correction_detected if existing_context is not None else False)
         merged_reinforcement_detected = reinforcement_detected or (existing_context.reinforcement_detected if existing_context is not None else False)
+        # 根据传入的参数 和 整合出来的参数，创建一个ConversationContext实体对象
         context = ConversationContext(
             thread_id=thread_id,
             messages=messages,
@@ -140,12 +148,14 @@ class MemoryUpdateQueue:
             reinforcement_detected=merged_reinforcement_detected,
         )
 
+        # 将队列中的等于queue_key的元素剔除，然后将新创建的context添加进去
         self._queue = [context for context in self._queue if self._queue_key(context.thread_id, context.user_id, context.agent_name) != queue_key]
         self._queue.append(context)
 
     def _reset_timer(self) -> None:
         """Reset the debounce timer."""
         config = get_memory_config()
+        # 使用配置中的debounce_seconds来调度timer
         self._schedule_timer(config.debounce_seconds)
 
         logger.debug("Memory update timer set for %ss", config.debounce_seconds)
@@ -153,14 +163,19 @@ class MemoryUpdateQueue:
     def _schedule_timer(self, delay_seconds: float) -> None:
         """Schedule queue processing after the provided delay."""
         # Cancel existing timer if any
+        # 如果当前存在timer，cancel掉
         if self._timer is not None:
             self._timer.cancel()
 
+        # 然后创建一个timer，设定延迟时间，到期之后执行_process_queue方法
+        # 也就是说，只要delay的时间内，队列中有新的update进来了，都需要重新计时。
+        # 默认30s，也就是说30s没有请求的时候，才处理队列中保存的ConversationContext
         self._timer = threading.Timer(
             delay_seconds,
             self._process_queue,
         )
         self._timer.daemon = True
+        # 启动timer
         self._timer.start()
 
     def _process_queue(self) -> None:
@@ -168,28 +183,39 @@ class MemoryUpdateQueue:
         # Import here to avoid circular dependency
         from deerflow.agents.memory.updater import MemoryUpdater
 
+        # 加锁，处理的时候防止有新的ConversationContext添加进来
         with self._lock:
+            # 这里判断processing状态，如果仍在processing的话，执行schedule_timer，立即使用另一个线程来尝试process。
+            # 类似于自旋吧。正常应该不会走到这个分支里面，因为update之后默认间隔30s才会进行下一次process
             if self._processing:
                 # Preserve immediate flush semantics even if another worker is active.
                 self._schedule_timer(0)
                 return
 
+            # 如果队列里面没有元素，直接返回
             if not self._queue:
                 return
 
+            # 如果存在元素，将队列元素复制出来并清空。设置processing为true，作为标识位。
+            # 然后解锁，防止被持久化操作持有锁的时间过长，导致添加元素的业务线程被block
             self._processing = True
             contexts_to_process = self._queue.copy()
             self._queue.clear()
+            # 将timer设置为None
             self._timer = None
 
         logger.info("Processing %d queued memory updates", len(contexts_to_process))
 
+        # 下面的才是具体的处理，抽取事实对象并持久化的逻辑
         try:
+            # 创建一个MemoryUpdater对象
             updater = MemoryUpdater()
 
+            # 遍历需要处理的ConversationContext集合
             for context in contexts_to_process:
                 try:
                     logger.info("Updating memory for thread %s", context.thread_id)
+                    # 调用updater更新memory信息
                     success = updater.update_memory(
                         messages=context.messages,
                         thread_id=context.thread_id,
@@ -206,10 +232,12 @@ class MemoryUpdateQueue:
                     logger.error("Error updating memory for thread %s: %s", context.thread_id, e)
 
                 # Small delay between updates to avoid rate limiting
+                # 这里短暂sleep一下防止被限流
                 if len(contexts_to_process) > 1:
                     time.sleep(0.5)
 
         finally:
+            # 最后加锁修改processing状态
             with self._lock:
                 self._processing = False
 

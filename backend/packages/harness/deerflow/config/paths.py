@@ -173,10 +173,12 @@ class Paths:
 
     def user_dir(self, user_id: str) -> Path:
         """Directory for a specific user: `{base_dir}/users/{user_id}/`."""
+        # 在base_dir后面拼接users/{user_id}
         return self.base_dir / "users" / _validate_user_id(user_id)
 
     def user_memory_file(self, user_id: str) -> Path:
         """Per-user memory file: `{base_dir}/users/{user_id}/memory.json`."""
+        # 在user_dir后面拼接/memory.json
         return self.user_dir(user_id) / "memory.json"
 
     def user_agents_dir(self, user_id: str) -> Path:

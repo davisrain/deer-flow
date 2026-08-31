@@ -64,9 +64,13 @@ def get_subagent_config(name: str, *, app_config: Any | None = None) -> Subagent
         SubagentConfig if found (with any config.yaml overrides applied), None otherwise.
     """
     # Step 1: Look up built-in, then fall back to custom_agents
+    # 第一步，从built-in以及custom_agents里面查找配置
+    # 如果是内置的subagent，直接通过dict获取
     config = BUILTIN_SUBAGENTS.get(name)
+    # 否则，根据配置文件的subagents模块中的配置来构建config
     if config is None:
         config = _build_custom_subagent_config(name, app_config=app_config)
+    # 如果仍然为None，返回None，表示没有找到配置
     if config is None:
         return None
 
@@ -75,22 +79,30 @@ def get_subagent_config(name: str, *, app_config: Any | None = None) -> Subagent
     # (timeout_seconds, max_turns at the top level) apply to built-in agents
     # but must NOT override custom agents' own values — custom agents define
     # their own defaults in the custom_agents section.
+    # 第二步，将配置文件中subagents.agents模块的配置应用给对应的subagent，这些配置就是指定的需要重写的配置
+
+    # 查找到subagents配置模块
     subagents_config = _resolve_subagents_app_config(app_config)
+    # 判断这个subagent是否是内置的
     is_builtin = name in BUILTIN_SUBAGENTS
+    # 从subagents.agents模块找到该subagent需要重写的配置
     agent_override = subagents_config.agents.get(name)
 
     overrides = {}
 
     # Timeout: per-agent override > global default (builtins only) > config's own value
+    # 如果override存在，且timeout属性也存在，并且和当前的配置不一样，使用override重写当前的配置
     if agent_override is not None and agent_override.timeout_seconds is not None:
         if agent_override.timeout_seconds != config.timeout_seconds:
             logger.debug("Subagent '%s': timeout overridden (%ss -> %ss)", name, config.timeout_seconds, agent_override.timeout_seconds)
             overrides["timeout_seconds"] = agent_override.timeout_seconds
+    # 如果是内置subagent 且 subagents配置模块中global的timeout存在 并且 不等于当前的timeout，使用global的覆盖内置的subagent的配置
     elif is_builtin and subagents_config.timeout_seconds != config.timeout_seconds:
         logger.debug("Subagent '%s': timeout from global default (%ss -> %ss)", name, config.timeout_seconds, subagents_config.timeout_seconds)
         overrides["timeout_seconds"] = subagents_config.timeout_seconds
 
     # Max turns: per-agent override > global default (builtins only) > config's own value
+    # 同理，覆盖max turns字段
     if agent_override is not None and agent_override.max_turns is not None:
         if agent_override.max_turns != config.max_turns:
             logger.debug("Subagent '%s': max_turns overridden (%s -> %s)", name, config.max_turns, agent_override.max_turns)
@@ -100,17 +112,21 @@ def get_subagent_config(name: str, *, app_config: Any | None = None) -> Subagent
         overrides["max_turns"] = subagents_config.max_turns
 
     # Model: per-agent override only (no global default for model)
+    # model字段，只使用per-agent的重写，subagents模块中没有global的配置
     effective_model = subagents_config.get_model_for(name)
+    # 如果per-agent里面重写了model，那么使用重写的
     if effective_model is not None and effective_model != config.model:
         logger.debug("Subagent '%s': model overridden (%s -> %s)", name, config.model, effective_model)
         overrides["model"] = effective_model
 
     # Skills: per-agent override only (no global default for skills)
+    # skills字段，只使用per-agent的重写，subagents模块中没有global的配置
     effective_skills = subagents_config.get_skills_for(name)
     if effective_skills is not None and effective_skills != config.skills:
         logger.debug("Subagent '%s': skills overridden (%s -> %s)", name, config.skills, effective_skills)
         overrides["skills"] = effective_skills
 
+    # 如果overrides有值，填入到subagent config对象中
     if overrides:
         config = replace(config, **overrides)
 

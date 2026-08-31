@@ -43,9 +43,11 @@ def _default_model_name(app_config: "AppConfig") -> str:
 
 def resolve_subagent_model_name(config: SubagentConfig, parent_model: str | None, *, app_config: "AppConfig | None" = None) -> str:
     """Resolve the effective model name a subagent should use."""
+    # 如果subagent的配置不是inherit，直接返回自身的
     if config.model != "inherit":
         return config.model
 
+    # 如果parent_model存在，直接返回
     if parent_model is not None:
         return parent_model
 
@@ -53,4 +55,5 @@ def resolve_subagent_model_name(config: SubagentConfig, parent_model: str | None
         from deerflow.config import get_app_config
 
         app_config = get_app_config()
+    # 否则使用配置文件models模块的第一个model
     return _default_model_name(app_config)

@@ -101,12 +101,17 @@ def create_chat_model(name: str | None = None, thinking_enabled: bool = False, *
     Returns:
         A chat model instance.
     """
+    # 获取app的配置
     config = app_config or get_app_config()
+    # 如果没有传入模型，默认使用配置文件中模型模块的第一个模型
     if name is None:
         name = config.models[0].name
+    # 获取对应的模型配置
     model_config = config.get_model_config(name)
+    # 如果没找到配置，报错
     if model_config is None:
         raise ValueError(f"Model {name} not found in config") from None
+    # 解析模型类
     model_class = resolve_class(model_config.use, BaseChatModel)
     model_settings_from_config = model_config.model_dump(
         exclude_none=True,

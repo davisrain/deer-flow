@@ -226,15 +226,23 @@ async def task_tool(
         prompt: The task description for the subagent. Be specific and clear about what needs to be done. ALWAYS PROVIDE THIS PARAMETER SECOND.
         subagent_type: The type of subagent to use. ALWAYS PROVIDE THIS PARAMETER THIRD.
     """
+    # 从Runtime中获取整个项目的配置文件 app_config
     runtime_app_config = _get_runtime_app_config(runtime)
+    # 查看配置文件中的token_usage模块是否是enable的
     cache_token_usage = _token_usage_cache_enabled(runtime_app_config)
+    # 从配置文件中获取能够使用的subagent的名字，会返回内置的subagent 和 配置文件subagents模块配置的custom_subagent的名称。
+    # 其中内置的bash subagent会根据配置文件sandbox模块是否允许bash操作来决定要不要返回
+    # 所以默认配置下：sandbox是LocalSandbox，不允许bash操作，且没有配置自定义subagent时，返回的只有general-purpose这一个subagent
     available_subagent_names = get_available_subagent_names(app_config=runtime_app_config) if runtime_app_config is not None else get_available_subagent_names()
 
     # Get subagent configuration
+    # 根据传入的subagent_type获取subagent的配置，里面会根据配置文件中的subagents模块里面的per-agent override 和 global配置进行一些配置的重写覆盖
     config = get_subagent_config(subagent_type, app_config=runtime_app_config) if runtime_app_config is not None else get_subagent_config(subagent_type)
+    # 如果没有找到配置，返回错误字符串给llm reflection
     if config is None:
         available = ", ".join(available_subagent_names)
         return f"Error: Unknown subagent type '{subagent_type}'. Available: {available}"
+    # 如果是bash 这个subagent，需要判断当前是否支持bash命令，不支持的话，也返回错误字符串
     if subagent_type == "bash":
         host_bash_allowed = is_host_bash_allowed(runtime_app_config) if runtime_app_config is not None else is_host_bash_allowed()
         if not host_bash_allowed:
@@ -246,8 +254,10 @@ async def task_tool(
     # Skills are loaded by SubagentExecutor per-session (aligned with Codex's pattern:
     # each subagent loads its own skills based on config, injected as conversation items).
     # No longer appended to system_prompt here.
+    # 这里是对齐codex的模式，每个subagent根据配置加载自己的skills
 
     # Extract parent context from runtime
+    # 从当前Runtime中提取父agent的上下文
     sandbox_state = None
     thread_data = None
     thread_id = None
@@ -255,7 +265,9 @@ async def task_tool(
     trace_id = None
     metadata: dict = {}
 
+    # 如果runtime不为None
     if runtime is not None:
+        # 提取sandbox thread_data thread_id
         sandbox_state = runtime.state.get("sandbox")
         thread_data = runtime.state.get("thread_data")
         thread_id = runtime.context.get("thread_id") if runtime.context else None
@@ -263,16 +275,22 @@ async def task_tool(
             thread_id = runtime.config.get("configurable", {}).get("thread_id")
 
         # Try to get parent model from configurable
+        # 获取metadata
         metadata = runtime.config.get("metadata", {})
+        # 尝试从metadata中获取model_name
         parent_model = metadata.get("model_name")
 
         # Get or generate trace_id for distributed tracing
         trace_id = metadata.get("trace_id") or str(uuid.uuid4())[:8]
 
+    # 尝试获取可用的skills列表，如果不是指定agent_name的情况下，默认是None
     parent_available_skills = metadata.get("available_skills")
+    # 如果父agent指定了skills，那么需要合并父子agent可用的skills
+    # 策略如下：如果父为空，使用子的；如果子为空，使用父的；否则使用子skills里面包含在父skills中的那些skills
     if parent_available_skills is not None:
         overrides["skills"] = _merge_skill_allowlists(list(parent_available_skills), config.skills)
 
+    # 如果overrides中存在值，覆盖config中的字段
     if overrides:
         config = replace(config, **overrides)
 
@@ -281,23 +299,30 @@ async def task_tool(
     from deerflow.tools import get_available_tools
 
     # Inherit parent agent's tool_groups so subagents respect the same restrictions
+    # 获取parent agent的tool_groups，同样，如果没有指定agent_name，为None
     parent_tool_groups = metadata.get("tool_groups")
     resolved_app_config = runtime_app_config
     if config.model == "inherit" and parent_model is None and resolved_app_config is None:
         resolved_app_config = get_app_config()
+    # 解析subagent要使用的model，根据subagent自己的config 和 parent agent使用的model，还有配置文件来决定
+    # 优先级是 subagent自己配置的model > parent_model > 配置文件中models模块的第一个model
     effective_model = resolve_subagent_model_name(config, parent_model, app_config=resolved_app_config)
 
     # Subagents should not have subagent tools enabled (prevent recursive nesting)
+    # 构建可用的工具参数，subagent不应该再启动subagent工具
     available_tools_kwargs = {
         "model_name": effective_model,
         "groups": parent_tool_groups,
         "subagent_enabled": False,
     }
+    # 将app_config添加进工具参数中
     if resolved_app_config is not None:
         available_tools_kwargs["app_config"] = resolved_app_config
+    # 获取subagent可用的工具，正常情况下会获取到和 parent agent相同的工具，只是会禁用task_tool（分派subagent的工具）
     tools = get_available_tools(**available_tools_kwargs)
 
     # Create executor
+    # 构建创建executor的参数: subagent配置，subagent可用的tools，parent_model等信息
     executor_kwargs = {
         "config": config,
         "tools": tools,
@@ -307,12 +332,15 @@ async def task_tool(
         "thread_id": thread_id,
         "trace_id": trace_id,
     }
+    # 如果app_config存在，也添加进executor的参数里面
     if resolved_app_config is not None:
         executor_kwargs["app_config"] = resolved_app_config
+    # 创建SubagentExecutor对象
     executor = SubagentExecutor(**executor_kwargs)
 
     # Start background execution (always async to prevent blocking)
     # Use tool_call_id as task_id for better traceability
+    # 创建后台执行的任务，使用tool_call_id作为task_id方便追踪
     task_id = executor.execute_async(prompt, task_id=tool_call_id)
 
     # Poll for task completion in backend (removes need for LLM to poll)
@@ -320,10 +348,12 @@ async def task_tool(
     last_status = None
     last_message_count = 0  # Track how many AI messages we've already sent
     # Polling timeout: execution timeout + 60s buffer, checked every 5s
+    # 计算出最大的轮询次数，每5s一次
     max_poll_count = (config.timeout_seconds + 60) // 5
 
     logger.info(f"[trace={trace_id}] Started background task {task_id} (subagent={subagent_type}, timeout={config.timeout_seconds}s, polling_limit={max_poll_count} polls)")
 
+    # 获取Runtime里面的stream_writer
     writer = get_stream_writer()
     # Send Task Started message'
     writer({"type": "task_started", "task_id": task_id, "description": description})

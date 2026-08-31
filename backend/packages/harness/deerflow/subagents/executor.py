@@ -154,11 +154,15 @@ def _run_isolated_subagent_loop(
     started_event: threading.Event,
 ) -> None:
     """Run the persistent isolated subagent loop in a dedicated daemon thread."""
+    # 将loop设置进threadlocal中
     asyncio.set_event_loop(loop)
+    # 往loop中添加started_evnet的set方法
     loop.call_soon(started_event.set)
     try:
+        # 调用loop的run_forever方法执行loop
         loop.run_forever()
     finally:
+        # 执行完成之后清除started_event的状态
         started_event.clear()
 
 
@@ -202,13 +206,19 @@ atexit.register(_shutdown_isolated_subagent_loop)
 def _get_isolated_subagent_loop() -> asyncio.AbstractEventLoop:
     """Return the persistent event loop used by isolated subagent executions."""
     global _isolated_subagent_loop, _isolated_subagent_loop_thread, _isolated_subagent_loop_started
+    # 加锁。
     with _isolated_subagent_loop_lock:
+        # 判断线程和eventloop是否存活和正在使用
         thread_is_alive = _isolated_subagent_loop_thread is not None and _isolated_subagent_loop_thread.is_alive()
         loop_is_usable = _isolated_subagent_loop is not None and not _isolated_subagent_loop.is_closed() and _isolated_subagent_loop.is_running() and thread_is_alive
 
+        # 如果loop没有在使用
         if not loop_is_usable:
+            # 创建一个新的eventloop
             loop = asyncio.new_event_loop()
+            # 创建一个threading的event
             started_event = threading.Event()
+            # 创建一个线程来跑event_loop
             thread = threading.Thread(
                 target=_run_isolated_subagent_loop,
                 args=(loop, started_event),
@@ -216,15 +226,22 @@ def _get_isolated_subagent_loop() -> asyncio.AbstractEventLoop:
                 daemon=True,
             )
             thread.start()
+            # 等待5s如果started_event还没有被设置的话。线程一开始就会往loop里面添加started_event的set任务，因此等待5s肯定已经设置好了
             if not started_event.wait(timeout=5):
+                # 停止event_loop，这里只是将loop里面的__stopping标志设置为true，整个loop循环中会检测标志并中断循环
+                # 因为这里是threadsafe的，会立马将selector唤醒，所以标志设置能立马执行。然后跳出到run_forever的时候就能break循环了
                 loop.call_soon_threadsafe(loop.stop)
+                # 这里等待1s就能结束，主要还是threadsafe保证的
                 thread.join(timeout=1)
                 loop.close()
+                # 抛出异常
                 raise RuntimeError("Timed out starting isolated subagent event loop")
+            # 启动成功之后，将loop thread started_event维护进全局变量
             _isolated_subagent_loop = loop
             _isolated_subagent_loop_thread = thread
             _isolated_subagent_loop_started = started_event
 
+        # 如果event_loop为None，报错
         if _isolated_subagent_loop is None:
             raise RuntimeError("Isolated subagent event loop is not initialized")
         return _isolated_subagent_loop
@@ -236,8 +253,11 @@ def _submit_to_isolated_loop_in_context(
 ) -> Future[SubagentResult]:
     """Submit a coroutine to the isolated loop while preserving ContextVar state."""
     return context.run(
+        # 这里等同于将这个协程放到subagent专用的eventloop中，让专用的线程来执行，并且返回一个concurrent的Future，用于阻塞等待
         lambda: asyncio.run_coroutine_threadsafe(
+            # 这个方法创建出要跑的协程，也就是实际执行subagent的逻辑
             coro_factory(),
+            # 获取独立的用于跑subagent的eventloop。这个方法里面会创建一个独立的线程来跑subagent的event_loop
             _get_isolated_subagent_loop(),
         )
     )
@@ -261,11 +281,13 @@ def _filter_tools(
     filtered = all_tools
 
     # Apply allowlist if specified
+    # 如果subagent自身指定了能使用的tools，根据这些tools来过滤
     if allowed is not None:
         allowed_set = set(allowed)
         filtered = [t for t in filtered if t.name in allowed_set]
 
     # Apply denylist
+    # 如果subagent自身自定了不能使用的tools，那么需要将这些tools剔除
     if disallowed is not None:
         disallowed_set = set(disallowed)
         filtered = [t for t in filtered if t.name not in disallowed_set]
@@ -307,9 +329,13 @@ class SubagentExecutor:
         # Resolve eagerly only when it does not require loading config.yaml; otherwise defer
         # to _create_agent (which already loads app_config) so unit tests can construct
         # executors without a config file present.
+        # 这里提前解析model_name，否则的话会延迟到_create_agent去解析
+
+        # 如果这里能够确认要使用的模型，直接解析并赋值
         if config.model != "inherit" or parent_model is not None or app_config is not None:
             self.model_name: str | None = resolve_subagent_model_name(config, parent_model, app_config=app_config)
         else:
+            # 否则model_name赋值为None
             self.model_name = None
         self.sandbox_state = sandbox_state
         self.thread_data = thread_data
@@ -317,6 +343,7 @@ class SubagentExecutor:
         # Generate trace_id if not provided (for top-level calls)
         self.trace_id = trace_id or str(uuid.uuid4())[:8]
 
+        # 这里过滤subagent能够使用的tools
         self._base_tools = _filter_tools(
             tools,
             config.tools,
@@ -355,6 +382,7 @@ class SubagentExecutor:
 
     async def _load_skills(self) -> list[Skill]:
         """Load enabled skill metadata based on config.skills."""
+        # 如果subagent的config里面的skills不为None，但skills的长度为0，返回空列表
         if self.config.skills is not None and len(self.config.skills) == 0:
             logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} skills=[] — skipping skill loading")
             return []
@@ -362,20 +390,25 @@ class SubagentExecutor:
         try:
             from deerflow.skills.storage import get_or_new_skill_storage
 
+            # 构建加载创建SkillStorage的参数
             storage_kwargs = {"app_config": self.app_config} if self.app_config is not None else {}
+            # 创建SkillStorage，这里使用loop里面的线程池来跑（不知道为什么）
             storage = await asyncio.to_thread(get_or_new_skill_storage, **storage_kwargs)
             # Use asyncio.to_thread to avoid blocking the event loop (LangGraph ASGI requirement)
+            # 使用SkillStorage加载skills，也是使用线程池来跑
             all_skills = await asyncio.to_thread(storage.load_skills, enabled_only=True)
             logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} loaded {len(all_skills)} enabled skills from disk")
         except Exception:
             logger.exception(f"[trace={self.trace_id}] Failed to load skills for subagent {self.config.name}")
             raise
 
+        # 如果没有加载到，返回空列表
         if not all_skills:
             logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} no enabled skills found")
             return []
 
         # Filter by config.skills whitelist
+        # 如果subagent的config里面配置了skills白名单，使用这些来筛选加载到的所有skills
         if self.config.skills is not None:
             allowed = set(self.config.skills)
             return [s for s in all_skills if s.name in allowed]
@@ -434,7 +467,9 @@ class SubagentExecutor:
         from deerflow.tools.builtins.tool_search import assemble_deferred_tools, get_deferred_tools_prompt_section
 
         # Load skills as conversation items (Codex pattern)
+        # 加载subagent可以使用的skills，也是通过SkillStorage来加载，只不过会使用subagent里面的skills白名单来过滤（如果存在的话）
         skills = await self._load_skills()
+        # 根据skills里面可能存在的allowedTools来过滤整体的tools列表
         filtered_tools = self._apply_skill_allowed_tools(skills)
         # Assemble deferred tool_search AFTER policy filtering (fail-closed),
         # mirroring the lead path so subagents stop binding full MCP schemas.
@@ -489,10 +524,12 @@ class SubagentExecutor:
         Returns:
             SubagentResult with the execution result.
         """
+        # 如果传入了SubagentResult，赋值给result
         if result_holder is not None:
             # Use the provided result holder (for async execution with real-time updates)
             result = result_holder
         else:
+            # 否则，创建一个新的
             # Create a new result for synchronous execution
             task_id = str(uuid.uuid4())[:8]
             result = SubagentResult(
@@ -508,6 +545,7 @@ class SubagentExecutor:
 
         collector: SubagentTokenCollector | None = None
         try:
+            # 根据task构建要跑subagent的一些初始状态
             state, final_tools, deferred_setup = await self._build_initial_state(task)
             agent = self._create_agent(final_tools, deferred_setup=deferred_setup)
 
@@ -769,6 +807,7 @@ class SubagentExecutor:
             task_id = str(uuid.uuid4())[:8]
 
         # Create initial pending result
+        # 首先创建一个SubagentResult对象，状态为pending
         result = SubagentResult(
             task_id=task_id,
             trace_id=self.trace_id,
@@ -777,27 +816,36 @@ class SubagentExecutor:
 
         logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} starting async execution, task_id={task_id}, timeout={self.config.timeout_seconds}s")
 
+        # 加锁，将结果添加进background_tasks这个dict中
         with _background_tasks_lock:
             _background_tasks[task_id] = result
 
+        # 复制parent中的上下文信息
         parent_context = copy_context()
 
         # Submit to scheduler pool
         def run_task():
+            # 加锁
             with _background_tasks_lock:
+                # 修改任务的执行状态为running
                 _background_tasks[task_id].status = SubagentStatus.RUNNING
+                # 更新任务的开始时间
                 _background_tasks[task_id].started_at = datetime.now()
+                # 持有任务结果对象
                 result_holder = _background_tasks[task_id]
 
             try:
                 # Submit execution directly to the persistent isolated loop so the
                 # background path does not create a temporary loop via execute().
+                # 将任务提交到独立的跑subagent的eventloop中去执行，并返回对应的future。
+                # 这个future是concurrent包下的future，不是asyncio里面的future
                 execution_future = _submit_to_isolated_loop_in_context(
                     parent_context,
                     lambda: self._aexecute(task, result_holder),
                 )
                 try:
                     # Wait for execution with timeout
+                    # 等待future的结果，超时时间使用subagent的配置
                     execution_future.result(timeout=self.config.timeout_seconds)
                 except FuturesTimeoutError:
                     logger.error(f"[trace={self.trace_id}] Subagent {self.config.name} execution timed out after {self.config.timeout_seconds}s")
@@ -814,6 +862,7 @@ class SubagentExecutor:
                     task_result = _background_tasks[task_id]
                 task_result.try_set_terminal(SubagentStatus.FAILED, error=str(e))
 
+        # 往线程池里面提交run_task任务
         _scheduler_pool.submit(run_task)
         return task_id
 
