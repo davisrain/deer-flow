@@ -477,31 +477,40 @@ class SubagentExecutor:
         # subagent's name-level allow/deny (config.tools / disallowed_tools):
         # its catalog is built from the already-filtered list, so it can never
         # surface a tool the policy denied. This matches the lead agent.
+        # 判断是否开启了tool_search
         enabled = (self.app_config or get_app_config()).tool_search.enabled
+        # 如果开启了，将mcp加载来的tools都放进延迟工具中
         final_tools, deferred_setup = assemble_deferred_tools(filtered_tools, enabled=enabled)
+        # 加载所有的skills的内容作为SystemMessage集合
         skill_messages = await self._load_skill_messages(skills)
 
         # Combine system_prompt and skills into a single SystemMessage.
         # Some LLM APIs reject multiple SystemMessages with
         # "System message must be at the beginning."
         system_parts: list[str] = []
+        # 创建system_prompt的内容
         if self.config.system_prompt:
             system_parts.append(self.config.system_prompt)
+        # 将skills的内容添加进system_prompt中
         for skill_msg in skill_messages:
             system_parts.append(skill_msg.content)
         # Name the deferred MCP tools in the prompt; their schemas stay withheld
         # until tool_search promotes them. Empty set -> "" -> appends nothing.
+        # 添加延迟暴露的tools的prompt模块
         deferred_section = get_deferred_tools_prompt_section(deferred_names=deferred_setup.deferred_names)
         if deferred_section:
             system_parts.append(deferred_section)
 
         messages: list[Any] = []
+        # 将这些system_prompt的列表拼接成一个SystemMessage
         if system_parts:
             messages.append(SystemMessage(content="\n\n".join(system_parts)))
 
         # Then the actual task
+        # 然后添加将task的内容添加为一个HumanMessage
         messages.append(HumanMessage(content=task))
 
+        # 构建subagent的AgentState对象
         state: dict[str, Any] = {
             "messages": messages,
         }
@@ -512,6 +521,7 @@ class SubagentExecutor:
         if self.thread_data is not None:
             state["thread_data"] = self.thread_data
 
+        # 返回state tools 还有延迟工具的setup
         return state, final_tools, deferred_setup
 
     async def _aexecute(self, task: str, result_holder: SubagentResult | None = None) -> SubagentResult:
