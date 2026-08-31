@@ -1,0 +1,14 @@
+backend/packages/harness/deerflow/subagents/executor.py
+  h_80ca37e46d63b9 480,482,484,491,494,499,505,510,513,524
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.43-trip",
+  "base_commit_sha": "f1fa895a8ff3870ccfd0c218282378a70b6de504",
+  "prompts": {},
+  "humans": {
+    "h_80ca37e46d63b9": {
+      "author": "zhengyudai <zhengyu_dai@foxmail.com>"
+    }
+  }
+}
