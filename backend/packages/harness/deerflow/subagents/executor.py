@@ -360,18 +360,23 @@ class SubagentExecutor:
         deferred MCP tool names + catalog hash so the subagent gets the same
         DeferredToolFilterMiddleware the lead agent has. ``None`` is a no-op.
         """
+        # 获取配置文件维护的配置
         app_config = self.app_config or get_app_config()
+        # 解析model_name
         if self.model_name is None:
             self.model_name = resolve_subagent_model_name(self.config, self.parent_model, app_config=app_config)
+        # 创建chat_model
         model = create_chat_model(name=self.model_name, thinking_enabled=False, app_config=app_config)
 
         from deerflow.agents.middlewares.tool_error_handling_middleware import build_subagent_runtime_middlewares
 
         # Reuse shared middleware composition with lead agent.
+        # 构建subagent的middleware链条，和lead agent的差别不大，剔除了一些subagent用不到的middleware，比如title、summary之类的
         middlewares = build_subagent_runtime_middlewares(app_config=app_config, model_name=self.model_name, lazy_init=True, deferred_setup=deferred_setup)
 
         # system_prompt is included in initial state messages (see _build_initial_state)
         # to avoid multiple SystemMessages which some LLM APIs don't support.
+        # 创建agent
         return create_agent(
             model=model,
             tools=tools if tools is not None else self.tools,
@@ -557,22 +562,28 @@ class SubagentExecutor:
         try:
             # 根据task构建要跑subagent的一些初始状态
             state, final_tools, deferred_setup = await self._build_initial_state(task)
+            # 创建subagent
             agent = self._create_agent(final_tools, deferred_setup=deferred_setup)
 
             # Token collector for subagent LLM calls
+            # 创建subagent的token收集器
             collector_caller = f"subagent:{self.config.name}"
             collector = SubagentTokenCollector(caller=collector_caller)
 
             # Build config with thread_id for sandbox access and recursion limit
+            # 构建subagent运行使用的RunnableConfig
             run_config: RunnableConfig = {
+                # 这个参数是控制langgraph图中执行的步骤，一次llm call + tool call会被认为是两步
                 "recursion_limit": self.config.max_turns,
                 "callbacks": [collector],
                 "tags": [collector_caller],
             }
             context: dict[str, Any] = {}
+            # 设置thread_id到RunnableConfig中
             if self.thread_id:
                 run_config["configurable"] = {"thread_id": self.thread_id}
                 context["thread_id"] = self.thread_id
+            # 设置app_config到context中
             if self.app_config is not None:
                 context["app_config"] = self.app_config
 
@@ -583,7 +594,9 @@ class SubagentExecutor:
             final_state = None
 
             # Pre-check: bail out immediately if already cancelled before streaming starts
+            # 如果在开始之前就cancel_event就已经被设置了
             if result.cancel_event.is_set():
+                # 打印日志，并且修改SubagentResult的状态并返回
                 logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} cancelled before streaming")
                 result.try_set_terminal(
                     SubagentStatus.CANCELLED,
@@ -592,11 +605,13 @@ class SubagentExecutor:
                 )
                 return result
 
+            # 调用agent的astream方法，将AgentState传入，stream_mode默认使用values
             async for chunk in agent.astream(state, config=run_config, context=context, stream_mode="values"):  # type: ignore[arg-type]
                 # Cooperative cancellation: check if parent requested stop.
                 # Note: cancellation is only detected at astream iteration boundaries,
                 # so long-running tool calls within a single iteration will not be
                 # interrupted until the next chunk is yielded.
+                # 每一轮循环都检查一下cancel_event的状态
                 if result.cancel_event.is_set():
                     logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} cancelled by parent")
                     result.try_set_terminal(
@@ -606,18 +621,24 @@ class SubagentExecutor:
                     )
                     return result
 
+                # 每次循环都将chunk赋值给final_state
                 final_state = chunk
 
                 # Extract AI messages from the current state
+                # 从chunk中提取消息列表
                 messages = chunk.get("messages", [])
+                # 如果消息列表存在
                 if messages:
+                    # 获取最后一个消息
                     last_message = messages[-1]
                     # Check if this is a new AI message
+                    # 如果是AIMessage
                     if isinstance(last_message, AIMessage):
                         # Convert message to dict for serialization
                         message_dict = last_message.model_dump()
                         # Only add if it's not already in the list (avoid duplicates)
                         # Check by comparing message IDs if available, otherwise compare full dict
+                        # 获取AIMessage的id，然后判断其是否在ai_messages集合里面，只有不存在的时候，才将其添加进ai_messages的列表
                         message_id = message_dict.get("id")
                         is_duplicate = False
                         if message_id:
@@ -629,15 +650,18 @@ class SubagentExecutor:
                             ai_messages.append(message_dict)
                             logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} captured AI message #{len(ai_messages)}")
 
+            # 完成之后打印日志
             logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} completed async execution")
             token_usage_records = collector.snapshot_records()
             final_result: str | None = None
 
+            # 如果final_state为None的话，final_result说明没有response生成
             if final_state is None:
                 logger.warning(f"[trace={self.trace_id}] Subagent {self.config.name} no final state")
                 final_result = "No response generated"
             else:
                 # Extract the final message - find the last AIMessage
+                # 如果不为None，找到最后的AIMessage
                 messages = final_state.get("messages", [])
                 logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} final messages count: {len(messages)}")
 
@@ -648,6 +672,7 @@ class SubagentExecutor:
                         last_ai_message = msg
                         break
 
+                # 提取最后的AIMessage的content作为final_result
                 if last_ai_message is not None:
                     content = last_ai_message.content
                     # Handle both str and list content types for the final result
@@ -674,6 +699,7 @@ class SubagentExecutor:
                         final_result = "\n".join(text_parts) if text_parts else "No text content in response"
                     else:
                         final_result = str(content)
+                # 如果没有找到AIMessage，降级为使用最后一个消息的content
                 elif messages:
                     # Fallback: use the last message if no AIMessage found
                     last_message = messages[-1]
@@ -699,6 +725,7 @@ class SubagentExecutor:
                         final_result = "\n".join(parts) if parts else "No text content in response"
                     else:
                         final_result = str(raw_content)
+                # 否则，说明没有返回生成
                 else:
                     logger.warning(f"[trace={self.trace_id}] Subagent {self.config.name} no messages in final state")
                     final_result = "No response generated"
@@ -706,6 +733,7 @@ class SubagentExecutor:
             if final_result is None:
                 final_result = "No response generated"
 
+            # 更新result的状态为COMPLETED，并且添加final_result和token使用记录
             result.try_set_terminal(
                 SubagentStatus.COMPLETED,
                 result=final_result,
@@ -714,6 +742,7 @@ class SubagentExecutor:
 
         except Exception as e:
             logger.exception(f"[trace={self.trace_id}] Subagent {self.config.name} async execution failed")
+            # 出现异常的话，更新result状态为FAILED
             result.try_set_terminal(
                 SubagentStatus.FAILED,
                 error=str(e),
@@ -860,11 +889,14 @@ class SubagentExecutor:
                 except FuturesTimeoutError:
                     logger.error(f"[trace={self.trace_id}] Subagent {self.config.name} execution timed out after {self.config.timeout_seconds}s")
                     # Signal cooperative cancellation and cancel the future
+                    # 如果执行subagent的线程等待超时了，往对应的SubagentResult里面设置cancel_event
                     result_holder.cancel_event.set()
+                    # 将SubagentResult状态更新为TIMED_OUT
                     result_holder.try_set_terminal(
                         SubagentStatus.TIMED_OUT,
                         error=f"Execution timed out after {self.config.timeout_seconds} seconds",
                     )
+                    # 调用execution_future的cancel方法
                     execution_future.cancel()
             except Exception as e:
                 logger.exception(f"[trace={self.trace_id}] Subagent {self.config.name} async execution failed")

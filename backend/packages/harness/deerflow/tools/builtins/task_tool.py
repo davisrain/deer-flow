@@ -356,12 +356,15 @@ async def task_tool(
     # 获取Runtime里面的stream_writer
     writer = get_stream_writer()
     # Send Task Started message'
+    # 发送task开始的信息
     writer({"type": "task_started", "task_id": task_id, "description": description})
 
     try:
         while True:
+            # 根据task_id去获取对应的SubagentResult对象
             result = get_background_task_result(task_id)
 
+            # 如果result为None，报错
             if result is None:
                 logger.error(f"[trace={trace_id}] Task {task_id} not found in background tasks")
                 writer({"type": "task_failed", "task_id": task_id, "error": "Task disappeared from background tasks"})
@@ -369,15 +372,19 @@ async def task_tool(
                 return f"Error: Task {task_id} disappeared from background tasks"
 
             # Log status changes for debugging
+            # 记录SubagentResult的最后的状态，如果发生改变了，打印日志
             if result.status != last_status:
                 logger.info(f"[trace={trace_id}] Task {task_id} status: {result.status.value}")
                 last_status = result.status
 
             # Check for new AI messages and send task_running events
+            # 记录SubagentResult中ai_messages的数量
             ai_messages = result.ai_messages or []
             current_message_count = len(ai_messages)
+            # 如果有新的AIMessage出现的话
             if current_message_count > last_message_count:
                 # Send task_running event for each new message
+                # 遍历这些新的AIMessage，写入StreamWriter
                 for i in range(last_message_count, current_message_count):
                     message = ai_messages[i]
                     writer(
@@ -390,17 +397,26 @@ async def task_tool(
                         }
                     )
                     logger.info(f"[trace={trace_id}] Task {task_id} sent message #{i + 1}/{current_message_count}")
+                # 更新最后的消息数量
                 last_message_count = current_message_count
 
             # Check if task completed, failed, or timed out
+            # 如果任务已经结束了，从result里面获取token用量的记录，并且汇总
             usage = _summarize_usage(getattr(result, "token_usage_records", None))
+            # 如果任务状态是完成
             if result.status == SubagentStatus.COMPLETED:
+                # 将使用的token数量缓存起来，以便主agent的middleware进行统计
                 _cache_subagent_usage(tool_call_id, usage, enabled=cache_token_usage)
+                # 将subagent的token用量报告给parent的RunJournal
                 _report_subagent_usage(runtime, result)
+                # 写入StreamWriter
                 writer({"type": "task_completed", "task_id": task_id, "result": result.result, "usage": usage})
                 logger.info(f"[trace={trace_id}] Task {task_id} completed after {poll_count} polls")
+                # 清理保存的SubagentResult
                 cleanup_background_task(task_id)
+                # 返回任务成功，作为工具调用的结果
                 return f"Task Succeeded. Result: {result.result}"
+            # 后续失败、取消、超时等状态同理
             elif result.status == SubagentStatus.FAILED:
                 _cache_subagent_usage(tool_call_id, usage, enabled=cache_token_usage)
                 _report_subagent_usage(runtime, result)
@@ -424,12 +440,15 @@ async def task_tool(
                 return f"Task timed out. Error: {result.error}"
 
             # Still running, wait before next poll
+            # 一次轮询完成之后，等待5s
             await asyncio.sleep(5)
+            # 添加轮询次数
             poll_count += 1
 
             # Polling timeout as a safety net (in case thread pool timeout doesn't work)
             # Set to execution timeout + 60s buffer, in 5s poll intervals
             # This catches edge cases where the background task gets stuck
+            # 如果轮询次数超过了最大轮询次数，这段逻辑是在兜底，因为正常情况下，task应该被future的超时而取消了
             if poll_count > max_poll_count:
                 timeout_minutes = config.timeout_seconds // 60
                 logger.error(f"[trace={trace_id}] Task {task_id} polling timed out after {poll_count} polls (should have been caught by thread pool timeout)")
@@ -440,8 +459,11 @@ async def task_tool(
                 # The task may still be running in the background. Signal cooperative
                 # cancellation and schedule deferred cleanup to remove the entry from
                 # _background_tasks once the background thread reaches a terminal state.
+                # 取消task_id对应的subagent任务
                 request_cancel_background_task(task_id)
+                # 向event_loop中添加一个延时的清理任务，用于清理被上一步取消的subagent task
                 _schedule_deferred_subagent_cleanup(task_id, trace_id, max_poll_count)
+                # 返回subagent task轮询超时的结果，作为tool调用的返回
                 return f"Task polling timed out after {timeout_minutes} minutes. This may indicate the background task is stuck. Status: {result.status.value}"
     except asyncio.CancelledError:
         # Signal the background subagent thread to stop cooperatively.
