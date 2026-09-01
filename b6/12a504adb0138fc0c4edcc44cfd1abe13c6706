@@ -1,0 +1,16 @@
+backend/packages/harness/deerflow/tools/builtins/task_tool.py
+  h_80ca37e46d63b9 359,364,367,375,381,384,387,400,404,406,408,410,412,415,417,419,443,445,451,462,464,466
+backend/packages/harness/deerflow/subagents/executor.py
+  h_80ca37e46d63b9 363,365,368,374,379,565,569,574,576,582,586,597,599,608,614,624,628,630,632,635,641,653,658,664,675,702,728,736,745,892,894,899
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.43-trip",
+  "base_commit_sha": "b612a504adb0138fc0c4edcc44cfd1abe13c6706",
+  "prompts": {},
+  "humans": {
+    "h_80ca37e46d63b9": {
+      "author": "zhengyudai <zhengyu_dai@foxmail.com>"
+    }
+  }
+}
